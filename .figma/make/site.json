@@ -1,0 +1,10 @@
+{
+  "description": "This web application streamlines communication by enabling users to send polite requests and reminders, enhancing collaboration and efficiency in team settings.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
