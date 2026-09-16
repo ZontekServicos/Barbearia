@@ -5,20 +5,21 @@ import {
   ShieldCheck, CalendarDays, CalendarCheck
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { DemoNotice } from '@/components/DemoNotice'
 import { Logo } from '@/components/Logo'
 import { SERVICES, BUSINESS_HOURS } from '@/data/mock'
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
+    <div className="relative isolate min-h-screen text-[var(--foreground)]">
+      <div aria-hidden="true" className="fixed inset-0 -z-10 pointer-events-none">
+        <img src="/brand/interior.jpg" alt="" fetchPriority="high" width="1536" height="1024" className="h-full w-full object-cover object-[68%_center] md:object-center" />
+        <div className="absolute inset-0 bg-black/70" />
+      </div>
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-20 bg-[var(--background)]/85 backdrop-blur-md">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 flex items-center justify-center shrink-0">
-              <Logo className="h-6 w-6 sm:h-7 sm:w-7 text-[var(--primary)]" />
-            </div>
+            <img src="/brand/logo-principal.jpg" alt="" width="1024" height="1536" className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover object-[center_45%] mix-blend-screen shrink-0" />
             <div className="flex flex-col leading-none">
               <span className="font-display font-bold text-lg sm:text-xl tracking-tight">ErickCorttes</span>
               <span className="hidden sm:block text-[10px] tracking-[0.25em] text-[var(--muted-foreground)] uppercase mt-1">Barbearia</span>
@@ -40,15 +41,12 @@ export default function Landing() {
         <div className="h-px bg-gradient-to-r from-transparent via-[var(--primary)]/45 to-transparent" />
       </header>
 
-      <main>
+      <main className="[&>section:not(:first-child)]:bg-[var(--background)]/40">
       {/* Hero */}
       <section className="relative overflow-hidden pt-28 sm:pt-36 pb-14 sm:pb-24 px-6">
-        <img src="/brand/interior.jpg" alt="" aria-hidden="true" fetchPriority="high" width="1536" height="1024" className="absolute inset-0 h-full w-full object-cover object-[68%_center] md:object-center pointer-events-none" />
-        <div aria-hidden="true" className="absolute inset-0 pointer-events-none bg-[linear-gradient(180deg,rgba(13,13,13,0.40)_0%,rgba(13,13,13,0.74)_45%,rgba(13,13,13,0.93)_82%,#0D0D0D_100%)]" />
 
         {/* No z-index here: a stacking context would isolate the logo's blend mode from the photo behind it. */}
         <div className="max-w-4xl mx-auto text-center relative">
-          <div className="flex justify-center"><DemoNotice /></div>
 
           {/* Main brand logo — the JPEG's black canvas is knocked out by screen blending,
               with the circular crop as a fallback if blend modes are unavailable. */}
@@ -272,7 +270,7 @@ export default function Landing() {
 
       </main>
       {/* Footer */}
-      <footer className="border-t border-[var(--border)] py-8 px-6">
+      <footer className="border-t border-[var(--border)] bg-[var(--background)]/80 py-8 px-6">
         <div className="max-w-5xl mx-auto flex flex-col items-center gap-4 text-sm text-[var(--muted-foreground)]">
           <div className="flex items-center gap-2">
             <Logo className="h-4 w-4 text-[var(--primary)]" />
