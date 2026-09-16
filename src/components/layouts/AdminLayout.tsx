@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Calendar, Users, Scissors,
   Settings, Menu, X, ChevronRight
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { containDialogFocus } from '@/components/ui/Modal'
+import { DemoNotice } from '@/components/DemoNotice'
+import { Logo } from '@/components/Logo'
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
@@ -17,6 +20,19 @@ const navItems = [
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const menuRef = useRef<HTMLDialogElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const dialog = menuRef.current!
+    if (mobileOpen) dialog.showModal()
+    else if (dialog.open) { dialog.close(); triggerRef.current?.focus() }
+  }, [mobileOpen])
+  useEffect(() => {
+    const desktop = matchMedia('(min-width: 768px)')
+    const closeOnDesktop = () => { if (desktop.matches) setMobileOpen(false) }
+    desktop.addEventListener('change', closeOnDesktop)
+    return () => desktop.removeEventListener('change', closeOnDesktop)
+  }, [])
 
   const isActive = (to: string, exact?: boolean) =>
     exact ? location.pathname === to : location.pathname.startsWith(to)
@@ -27,10 +43,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <aside className="hidden md:flex w-60 flex-col border-r border-[var(--border)] bg-[var(--card)] flex-shrink-0">
         <div className="p-6 border-b border-[var(--border)]">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-[var(--primary)] flex items-center justify-center">
-              <Scissors className="w-3.5 h-3.5 text-black" />
-            </div>
-            <span className="font-bold tracking-tight text-[var(--primary)] text-lg">Cuts & Co.</span>
+            <Logo className="h-7 w-7 text-[var(--primary)]" />
+            <span className="font-bold tracking-tight text-[var(--primary)] text-lg">ErickCorttes</span>
           </div>
           <p className="text-xs text-[var(--muted-foreground)] mt-1 ml-9">Painel do Barbeiro</p>
         </div>
@@ -42,6 +56,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <Link
                 key={to}
                 to={to}
+                aria-current={active ? 'page' : undefined}
                 className={cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
                   active
@@ -70,30 +85,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </aside>
 
-      {/* Mobile overlay */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/70 md:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
       {/* Mobile sidebar */}
-      <aside
-        inert={!mobileOpen}
-        className={cn(
-          'fixed inset-y-0 left-0 z-40 w-64 bg-[var(--card)] border-r border-[var(--border)] flex flex-col transition-transform duration-300 md:hidden',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full'
-        )}
-      >
+      <dialog onClick={event => {
+        if (event.target !== event.currentTarget) return
+        const rect = event.currentTarget.getBoundingClientRect()
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) setMobileOpen(false)
+      }} onKeyDown={containDialogFocus} ref={menuRef} aria-label="Navegação administrativa" onCancel={event => { event.preventDefault(); setMobileOpen(false) }}
+        className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-dvh w-72 max-w-[calc(100%-2rem)] border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] p-0 backdrop:bg-black/70">
+
         <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-[var(--primary)] flex items-center justify-center">
-              <Scissors className="w-3.5 h-3.5 text-black" />
-            </div>
-            <span className="font-bold tracking-tight text-[var(--primary)]">Cuts & Co.</span>
+            <Logo className="h-7 w-7 text-[var(--primary)]" />
+            <span className="font-bold tracking-tight text-[var(--primary)]">ErickCorttes</span>
           </div>
-          <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="w-11 h-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -104,6 +109,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <Link
                 key={to}
                 to={to}
+                aria-current={active ? 'page' : undefined}
                 onClick={() => setMobileOpen(false)}
                 className={cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
@@ -118,27 +124,29 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             )
           })}
         </nav>
-      </aside>
+      </dialog>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Mobile header */}
         <header className="md:hidden sticky top-0 z-20 bg-[var(--card)]/90 backdrop-blur border-b border-[var(--border)] px-4 py-3 flex items-center gap-3">
           <button
+            ref={triggerRef}
             aria-label="Abrir menu"
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
-            className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+            className="w-11 h-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
           >
             <Menu className="h-5 w-5" />
           </button>
           <div className="flex items-center gap-2">
-            <Scissors className="h-4 w-4 text-[var(--primary)]" />
+            <Logo className="h-5 w-5 text-[var(--primary)]" />
             <span className="font-bold tracking-tight text-sm">Painel Admin</span>
           </div>
         </header>
 
         <main className="flex-1 p-4 md:p-8 overflow-auto">
+          <DemoNotice />
           {children}
         </main>
       </div>

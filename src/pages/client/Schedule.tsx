@@ -78,6 +78,7 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
         {active.map(service => (
           <button
             key={service.id}
+            aria-pressed={selected === service.id}
             onClick={() => setSelected(service.id)}
             className={cn(
               'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
@@ -198,6 +199,8 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
             return (
               <button
                 key={day.toISOString()}
+                aria-label={format(day, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                aria-pressed={!!sel}
                 disabled={disabled}
                 onClick={() => setSelected(day)}
                 className={cn(
@@ -260,6 +263,8 @@ function TimeStep({
           return (
             <button
               key={time}
+              aria-pressed={isSelected}
+              aria-label={`${time}${isOccupied ? ' indisponível' : ''}`}
               disabled={isOccupied}
               onClick={() => setSelected(time)}
               className={cn(
@@ -304,7 +309,7 @@ function ConfirmStep({
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button disabled={loading} aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -339,7 +344,7 @@ function ConfirmStep({
       </div>
 
       <Button className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
-        {loading ? 'Confirmando...' : 'Confirmar agendamento'}
+        {loading ? 'Simulando...' : 'Confirmar simulação'}
       </Button>
     </div>
   )
@@ -352,14 +357,15 @@ function SuccessStep({ service, date, time, onRestart }: { service: Service; dat
       <div className="w-20 h-20 rounded-full bg-[var(--primary)]/15 border-2 border-[var(--primary)]/40 flex items-center justify-center mx-auto mb-6">
         <Check className="h-10 w-10 text-[var(--primary)]" />
       </div>
-      <h2 className="text-2xl font-bold tracking-tight mb-2">Agendamento confirmado!</h2>
+      <h2 className="text-2xl font-bold tracking-tight mb-2">Simulação concluída!</h2>
       <p className="text-[var(--muted-foreground)] text-sm mb-8">
-        Você está agendado para{' '}
+        Você simulou{' '}
         <span className="text-[var(--foreground)] font-medium">{service.name}</span>{' '}
         no dia <span className="text-[var(--foreground)] font-medium">{format(date, "dd/MM", { locale: ptBR })}</span>{' '}
         às <span className="text-[var(--foreground)] font-medium">{time}</span>.
       </p>
 
+      <p role="status" className="text-sm text-[var(--muted-foreground)] mb-6">Nenhuma reserva foi criada. Os horários são exemplos, sem garantia de disponibilidade.</p>
       <div className="border border-[var(--primary)]/30 bg-[var(--primary)]/5 rounded-xl p-4 mb-8 text-left">
         <p className="text-xs text-[var(--muted-foreground)] mb-1">Lembrete</p>
         <p className="text-sm text-[var(--foreground)]">Chegue com 5 minutos de antecedência. Em caso de imprevisto, cancele com pelo menos 2 horas de antecedência.</p>

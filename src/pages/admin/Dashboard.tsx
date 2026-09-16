@@ -53,15 +53,15 @@ export default function Dashboard() {
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => navigate('/admin/agenda')}>
             <CalendarPlus className="h-4 w-4 mr-1.5" />
-            Novo agendamento
+            Ver agenda
           </Button>
           <Button size="sm" variant="outline" onClick={() => navigate('/admin/clients')}>
             <UserPlus className="h-4 w-4 mr-1.5" />
-            Novo cliente
+            Ver clientes
           </Button>
           <Button size="sm" variant="outline" onClick={() => navigate('/admin/services')}>
             <Scissors className="h-4 w-4 mr-1.5" />
-            Novo serviço
+            Gerenciar serviços
           </Button>
         </div>
       </div>
@@ -70,7 +70,7 @@ export default function Dashboard() {
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h3 className="text-lg font-semibold tracking-tight">Próximos atendimentos</h3>
-          <Link to="/admin/agenda" className="text-sm text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors">
+          <Link to="/admin/agenda" className="min-h-11 inline-flex items-center text-sm text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors">
             Ver agenda completa →
           </Link>
         </div>

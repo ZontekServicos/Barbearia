@@ -42,7 +42,7 @@ export default function ClientHome() {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs font-semibold tracking-widest text-[var(--primary)] uppercase">Próximos</h3>
-          <Link to="/client/appointments" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <Link to="/client/appointments" className="min-h-11 inline-flex items-center text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
             Ver todos →
           </Link>
         </div>

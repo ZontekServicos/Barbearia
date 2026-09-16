@@ -14,6 +14,11 @@ function formatDate(dateStr: string) {
 
 export default function AppointmentDetail() {
   const { id } = useParams<{ id: string }>()
+  return <AppointmentDetailContent key={id} />
+}
+
+function AppointmentDetailContent() {
+  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const apt = APPOINTMENTS.find(a => a.id === id)
 
@@ -43,7 +48,7 @@ export default function AppointmentDetail() {
     <div className="max-w-xl">
       {/* Toast */}
       {toast && (
-        <div className="fixed top-4 right-4 z-50 bg-[var(--card)] border border-green-500/50 text-green-400 px-4 py-3 rounded-xl text-sm shadow-xl">
+        <div role="status" className="fixed top-4 right-4 left-4 sm:left-auto z-50 bg-[var(--card)] border border-green-500/50 text-green-400 px-4 py-3 rounded-xl text-sm shadow-xl">
           {toast}
         </div>
       )}

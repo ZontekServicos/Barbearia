@@ -4,11 +4,13 @@ import {
   Phone, Star, ChevronRight, AtSign
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DemoNotice } from '@/components/DemoNotice'
+import { Logo } from '@/components/Logo'
 import { SERVICES, BUSINESS_HOURS } from '@/data/mock'
 
 const testimonials = [
   { name: 'Marcos T.', rating: 5, text: 'Melhor barbearia da região. Atendimento impecável, sempre saio satisfeito.' },
-  { name: 'André R.', rating: 5, text: 'Profissionalismo de alto nível. O Cuts & Co. virou minha barbearia fixa.' },
+  { name: 'André R.', rating: 5, text: 'Profissionalismo de alto nível. A ErickCorttes virou minha barbearia fixa.' },
   { name: 'Felipe M.', rating: 5, text: 'Ambiente incrível e barbeiro talentoso. Vale cada centavo.' },
 ]
 
@@ -29,10 +31,8 @@ export default function Landing() {
       <header className="fixed top-0 left-0 right-0 z-20 bg-[var(--background)]/80 backdrop-blur border-b border-[var(--border)]">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-[var(--primary)] flex items-center justify-center">
-              <Scissors className="w-4 h-4 text-black" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">Cuts & Co.</span>
+            <Logo className="h-8 w-8 text-[var(--primary)]" />
+            <span className="font-bold text-lg tracking-tight">ErickCorttes</span>
           </div>
           <div className="flex items-center gap-3">
             <Link to="/admin" className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors hidden sm:block">
@@ -45,6 +45,7 @@ export default function Landing() {
         </div>
       </header>
 
+      <main>
       {/* Hero */}
       <section className="pt-32 pb-24 px-6 relative overflow-hidden">
         {/* Decorative grid */}
@@ -56,9 +57,10 @@ export default function Landing() {
         <div className="absolute top-24 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full bg-[var(--primary)]/8 blur-3xl pointer-events-none" />
 
         <div className="max-w-4xl mx-auto text-center relative z-10">
+          <DemoNotice />
           <div className="inline-flex items-center gap-2 border border-[var(--primary)]/30 bg-[var(--primary)]/10 rounded-full px-4 py-1.5 text-sm text-[var(--primary)] font-medium mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)] animate-pulse" />
-            Agendamento online disponível
+            Explore o agendamento
           </div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tighter leading-none mb-6">
@@ -67,7 +69,7 @@ export default function Landing() {
           </h1>
 
           <p className="text-[var(--muted-foreground)] text-lg md:text-xl max-w-xl mx-auto mb-10">
-            Barbearia premium com atendimento rápido e descomplicado. Agende seu horário em segundos pelo celular.
+            Barbearia premium com atendimento rápido e descomplicado. Explore o fluxo de agendamento pelo celular.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
@@ -119,7 +121,7 @@ export default function Landing() {
             {SERVICES.filter(s => s.active).map((service) => (
               <div
                 key={service.id}
-                className="group border border-[var(--border)] bg-[var(--card)] rounded-2xl p-6 hover:border-[var(--primary)]/50 transition-all hover:shadow-[0_0_20px_rgba(212,175,55,0.08)] cursor-pointer"
+                className="group border border-[var(--border)] bg-[var(--card)] rounded-2xl p-6 hover:border-[var(--primary)]/50 transition-all hover:shadow-[0_0_20px_rgba(212,175,55,0.08)]"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/15 flex items-center justify-center">
@@ -207,7 +209,7 @@ export default function Landing() {
               </a>
 
               <a
-                href="https://instagram.com/cutsandco"
+                href="https://instagram.com/erickcorttes"
                 className="flex items-center gap-3 group"
               >
                 <div className="w-9 h-9 rounded-lg bg-[var(--secondary)] flex items-center justify-center shrink-0">
@@ -215,7 +217,7 @@ export default function Landing() {
                 </div>
                 <div>
                   <p className="font-medium text-sm">Instagram</p>
-                  <p className="text-[var(--muted-foreground)] text-sm group-hover:text-[var(--primary)] transition-colors">@cutsandco</p>
+                  <p className="text-[var(--muted-foreground)] text-sm group-hover:text-[var(--primary)] transition-colors">@erickcorttes</p>
                 </div>
               </a>
             </div>
@@ -277,15 +279,16 @@ export default function Landing() {
         </div>
       </section>
 
+      </main>
       {/* Footer */}
       <footer className="border-t border-[var(--border)] py-8 px-6">
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-[var(--muted-foreground)]">
           <div className="flex items-center gap-2">
-            <Scissors className="h-4 w-4 text-[var(--primary)]" />
-            <span className="font-medium text-[var(--foreground)]">Cuts & Co.</span>
+            <Logo className="h-4 w-4 text-[var(--primary)]" />
+            <span className="font-medium text-[var(--foreground)]">ErickCorttes</span>
           </div>
-          <p>© 2026 Cuts & Co. Todos os direitos reservados.</p>
-          <Link to="/admin" className="hover:text-[var(--foreground)] transition-colors">Área administrativa</Link>
+          <p>© 2026 ErickCorttes. Todos os direitos reservados.</p>
+          <Link to="/admin" className="min-h-11 inline-flex items-center hover:text-[var(--foreground)] transition-colors">Área administrativa</Link>
         </div>
       </footer>
     </div>

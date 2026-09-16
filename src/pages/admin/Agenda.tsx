@@ -128,18 +128,18 @@ export default function Agenda() {
                     key={apt.id}
                     to={`/admin/agenda/${apt.id}`}
                     className={cn(
-                      'flex items-center gap-4 p-4 border border-[var(--border)] border-l-4 bg-[var(--card)] rounded-xl hover:bg-[var(--secondary)]/30 transition-all',
+                      'flex flex-wrap sm:flex-nowrap items-center gap-3 p-4 border border-[var(--border)] border-l-4 bg-[var(--card)] rounded-xl hover:bg-[var(--secondary)]/30 transition-all',
                       statusColor(apt.status)
                     )}
                   >
                     <span className="font-mono text-sm font-bold text-[var(--primary)] w-12 shrink-0">{apt.time}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm truncate">{apt.clientName}</p>
+                    <div className="flex-1 min-w-[8rem]">
+                      <p className="font-semibold text-sm break-words">{apt.clientName}</p>
                       <p className="text-xs text-[var(--muted-foreground)]">
                         {apt.serviceName} · {apt.serviceDuration} min · {apt.clientPhone}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex items-center justify-end gap-3 w-full sm:w-auto shrink-0">
                       <span className="text-sm font-medium text-[var(--muted-foreground)]">R$ {apt.servicePrice}</span>
                       <StatusBadge status={apt.status} />
                     </div>
@@ -168,13 +168,13 @@ export default function Agenda() {
                       key={apt.id}
                       to={`/admin/agenda/${apt.id}`}
                       className={cn(
-                        'flex items-center gap-4 p-4 border border-[var(--border)] border-l-4 bg-[var(--card)] rounded-xl hover:bg-[var(--secondary)]/30 transition-all',
+                        'flex flex-wrap sm:flex-nowrap items-center gap-3 p-4 border border-[var(--border)] border-l-4 bg-[var(--card)] rounded-xl hover:bg-[var(--secondary)]/30 transition-all',
                         statusColor(apt.status)
                       )}
                     >
                       <span className="font-mono text-sm font-bold text-[var(--primary)] w-12 shrink-0">{apt.time}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm truncate">{apt.clientName}</p>
+                      <div className="flex-1 min-w-[8rem]">
+                        <p className="font-semibold text-sm break-words">{apt.clientName}</p>
                         <p className="text-xs text-[var(--muted-foreground)]">{apt.serviceName} · {apt.serviceDuration} min</p>
                       </div>
                       <StatusBadge status={apt.status} />

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Scissors, Plus, Edit2, Trash2, Clock, DollarSign, X, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/badge'
 import { SERVICES } from '@/data/mock'
 import type { Service } from '@/data/mock'
@@ -22,14 +23,15 @@ function ServiceForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    onSave({ name, description, price: Number(price), duration: Number(duration), active: initial?.active ?? true })
+    if (!name.trim()) return
+    onSave({ name: name.trim(), description, price: Number(price), duration: Number(duration), active: initial?.active ?? true })
   }
 
   return (
     <form onSubmit={handleSubmit} className="border border-[var(--primary)]/30 bg-[var(--card)] rounded-2xl p-5 space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="col-span-2">
-          <Input label="Nome do serviço" value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Corte" required />
+          <Input label="Nome do serviço" pattern=".*\S.*" title="Informe um nome com pelo menos um caractere que não seja espaço" value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Corte" required />
         </div>
         <div className="col-span-2">
           <Input label="Descrição" value={description} onChange={e => setDescription(e.target.value)} placeholder="Breve descrição" />
@@ -117,7 +119,7 @@ export default function Services() {
                 onCancel={() => setEditingId(null)}
               />
             ) : (
-              <div className={`border rounded-2xl p-5 transition-all ${service.active ? 'border-[var(--border)] bg-[var(--card)]' : 'border-[var(--border)]/50 bg-[var(--card)]/50 opacity-60'}`}>
+              <div className={`border rounded-2xl p-5 transition-all ${service.active ? 'border-[var(--border)] bg-[var(--card)]' : 'border-[var(--border)]/50 bg-[var(--card)]/50'}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center">
@@ -175,16 +177,14 @@ export default function Services() {
 
       {/* Delete confirmation */}
       {deleteId && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-[var(--card)] border border-[var(--border)] rounded-2xl w-full max-w-sm p-6">
-            <h3 className="text-lg font-bold mb-2">Excluir serviço?</h3>
+        <Modal titleId="delete-service-title" onClose={() => setDeleteId(null)}>
+            <h3 id="delete-service-title" className="text-lg font-bold mb-2">Excluir serviço?</h3>
             <p className="text-sm text-[var(--muted-foreground)] mb-6">Esta ação não pode ser desfeita.</p>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setDeleteId(null)}>Cancelar</Button>
               <Button variant="destructive" className="flex-1" onClick={() => handleDelete(deleteId)}>Excluir</Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

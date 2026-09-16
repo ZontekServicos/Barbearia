@@ -7,27 +7,28 @@
 
 @layer base {
   :root {
-    --background: #111111;
-    --foreground: #F5F5F5;
-    
-    --card: #1C1C1C;
-    --card-foreground: #F5F5F5;
-    
+    --background: #0A0A0A;
+    --foreground: #F0E6D2;
+
+    --card: #171512;
+    --card-foreground: #F0E6D2;
+
     --primary: #D4AF37; /* Gold accent */
-    --primary-foreground: #111111;
-    
-    --secondary: #2A2A2A;
-    --secondary-foreground: #E0E0E0;
-    
-    --muted: #2A2A2A;
-    --muted-foreground: #A0A0A0;
-    
+    --primary-dark: #9C7A2E; /* Deeper bronze-gold for gradients/depth */
+    --primary-foreground: #0A0A0A;
+
+    --secondary: #211E17;
+    --secondary-foreground: #E5DCC8;
+
+    --muted: #211E17;
+    --muted-foreground: #A39B8B;
+
     --accent: #D4AF37;
-    --accent-foreground: #111111;
-    
-    --border: #333333;
+    --accent-foreground: #0A0A0A;
+
+    --border: #302A1D;
     --ring: #D4AF37;
-    
+
     --radius: 0.5rem;
     
     /* Additional custom properties for semantic colors */
@@ -41,6 +42,28 @@
 
   * {
     border-color: var(--border);
+  }
+
+  :where(button, a, input, select, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+
+  button {
+    min-width: 24px;
+    min-height: 24px;
+  }
+
+  @media (pointer: coarse) {
+    button { min-height: 44px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   body {

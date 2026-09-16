@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Phone, MessageSquare, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DemoNotice } from '@/components/DemoNotice'
 import { Input } from '@/components/ui/input'
 
 type Step = 'phone' | 'otp' | 'register'
@@ -23,6 +24,7 @@ export default function Login() {
 
   function formatPhone(value: string) {
     const digits = value.replace(/\D/g, '').slice(0, 11)
+    if (!digits) return ''
     if (digits.length <= 2) return `(${digits}`
     if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`
     return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
@@ -79,10 +81,12 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--background)] flex flex-col items-center justify-center px-6 py-12">
+    <main className="min-h-dvh bg-[var(--background)] flex flex-col items-center justify-center px-6 py-12">
       <div className="w-full max-w-sm">
+        <DemoNotice />
         {/* Back */}
         <button
+          disabled={loading}
           onClick={() => step === 'phone' ? navigate('/') : setStep('phone')}
           className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-8"
         >
@@ -101,14 +105,14 @@ export default function Login() {
           {step === 'phone' && (
             <>
               <h1 className="text-2xl font-bold tracking-tight">Qual é o seu número?</h1>
-              <p className="text-sm text-[var(--muted-foreground)] mt-2">Usamos seu WhatsApp para confirmar o agendamento.</p>
+              <p className="text-sm text-[var(--muted-foreground)] mt-2">Use um número de exemplo. Nenhuma mensagem será enviada.</p>
             </>
           )}
           {step === 'otp' && (
             <>
               <h1 className="text-2xl font-bold tracking-tight">Digite o código</h1>
               <p className="text-sm text-[var(--muted-foreground)] mt-2">
-                Enviamos um código para<br />
+                Simulação para<br />
                 <span className="text-[var(--foreground)] font-medium">{phone}</span>
               </p>
             </>
@@ -145,6 +149,7 @@ export default function Login() {
               placeholder="(71) 99999-9999"
               value={phone}
               onChange={handlePhoneChange}
+              autoComplete="tel"
               inputMode="tel"
               required
             />
@@ -162,7 +167,7 @@ export default function Login() {
         {step === 'otp' && (
           <form onSubmit={handleOtpSubmit} className="space-y-6">
             <div>
-              <p className="text-sm text-center text-[var(--muted-foreground)] mb-4">Código de 6 dígitos</p>
+              <p className="text-sm text-center text-[var(--muted-foreground)] mb-4">Digite quaisquer 6 dígitos para explorar. Para testar o cadastro, use um telefone com 8888.</p>
               <div className="flex gap-2 justify-center">
                 {otp.map((digit, i) => (
                   <input
@@ -171,6 +176,14 @@ export default function Login() {
                     type="text"
                     inputMode="numeric"
                     aria-label={`Dígito ${i + 1} do código`}
+                    autoComplete={i === 0 ? "one-time-code" : "off"}
+                    onPaste={event => {
+                      event.preventDefault()
+                      const digits = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6).split('')
+                      if (!digits.length) return
+                      setOtp(Array.from({ length: 6 }, (_, index) => digits[index] ?? ''))
+                      otpRefs.current[Math.min(digits.length, 5)]?.focus()
+                    }}
                     maxLength={1}
                     value={digit}
                     onChange={e => handleOtpChange(i, e.target.value)}
@@ -190,13 +203,13 @@ export default function Login() {
             </Button>
 
             <p className="text-center text-sm text-[var(--muted-foreground)]">
-              Não recebeu?{' '}
+              Quer repetir?{' '}
               <button
                 type="button"
                 className="text-[var(--primary)] hover:underline"
-                onClick={() => setOtp(['', '', '', '', '', ''])}
+                onClick={() => { setOtp(['', '', '', '', '', '']); otpRefs.current[0]?.focus() }}
               >
-                Reenviar código
+                Limpar código
               </button>
             </p>
           </form>
@@ -228,11 +241,11 @@ export default function Login() {
               className="w-full h-12 text-base mt-2"
               disabled={loading || !name.trim()}
             >
-              {loading ? 'Criando conta...' : 'Criar conta e agendar'}
+              {loading ? 'Criando conta...' : 'Simular cadastro e agendar'}
             </Button>
           </form>
         )}
       </div>
-    </div>
+    </main>
   )
 }

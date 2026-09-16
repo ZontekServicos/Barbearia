@@ -1,3 +1,5 @@
+// Demo fixtures only. Availability and booking rules must be revalidated atomically
+// by a future authenticated backend before any real reservation is confirmed.
 export interface Service {
   id: string
   name: string

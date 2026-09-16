@@ -13,6 +13,11 @@ function formatDate(dateStr: string) {
 
 export default function ClientProfile() {
   const { id } = useParams<{ id: string }>()
+  return <ClientProfileContent key={id} />
+}
+
+function ClientProfileContent() {
+  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
 
   const client = CLIENTS.find(c => c.id === id)
@@ -49,7 +54,7 @@ export default function ClientProfile() {
   return (
     <div className="max-w-2xl">
       {toast && (
-        <div className="fixed top-4 right-4 z-50 bg-[var(--card)] border border-[var(--primary)]/40 text-[var(--foreground)] px-4 py-3 rounded-xl text-sm shadow-xl">
+        <div role="status" className="fixed top-4 right-4 left-4 sm:left-auto z-50 bg-[var(--card)] border border-[var(--primary)]/40 text-[var(--foreground)] px-4 py-3 rounded-xl text-sm shadow-xl">
           {toast}
         </div>
       )}
@@ -153,7 +158,7 @@ export default function ClientProfile() {
       {/* Actions */}
       <div className="flex flex-wrap gap-2 mb-8">
         <Button size="sm" asChild>
-          <Link to="/admin/agenda">Criar agendamento</Link>
+          <Link to="/admin/agenda">Ver agenda</Link>
         </Button>
         <Button
           size="sm"

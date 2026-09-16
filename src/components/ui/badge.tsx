@@ -30,7 +30,8 @@ export function Badge({ className, variant = 'default', ...props }: BadgeProps) 
   )
 }
 
-export type AppointmentStatus = 'confirmed' | 'completed' | 'cancelled' | 'missed'
+import type { AppointmentStatus } from '@/data/mock'
+export type { AppointmentStatus } from '@/data/mock'
 
 export const statusConfig: Record<AppointmentStatus, { label: string; variant: BadgeVariant }> = {
   confirmed: { label: 'Confirmado', variant: 'confirmed' },

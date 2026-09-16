@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { CalendarPlus, Clock, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
+import { Modal } from '@/components/ui/Modal'
 import { APPOINTMENTS } from '@/data/mock'
 
 const today = '2026-09-15'
@@ -28,6 +29,7 @@ export default function Appointments() {
   const [cancelled, setCancelled] = useState<string[]>([])
 
   const filteredUpcoming = upcoming.filter(a => !cancelled.includes(a.id))
+  const displayedHistory = [...history, ...upcoming.filter(a => cancelled.includes(a.id)).map(a => ({ ...a, status: 'cancelled' as const }))].sort((a, b) => b.date.localeCompare(a.date))
 
   function handleCancel(id: string) {
     setCancelled(prev => [...prev, id])
@@ -74,7 +76,7 @@ export default function Appointments() {
                   <span className="text-[var(--primary)] font-bold">R$ {apt.servicePrice}</span>
                   <button
                     onClick={() => setCancelId(apt.id)}
-                    className="flex items-center gap-1 text-xs text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
+                    className="min-h-11 px-2 flex items-center gap-1 text-xs text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                   >
                     <X className="h-3.5 w-3.5" />
                     Cancelar
@@ -90,11 +92,11 @@ export default function Appointments() {
       <section>
         <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Histórico</h3>
 
-        {history.length === 0 ? (
+        {displayedHistory.length === 0 ? (
           <p className="text-[var(--muted-foreground)] text-sm">Nenhum atendimento anterior.</p>
         ) : (
           <div className="space-y-2">
-            {history.map(apt => (
+            {displayedHistory.map(apt => (
               <div
                 key={apt.id}
                 className="border border-[var(--border)] bg-[var(--card)] rounded-xl px-4 py-3 flex items-center justify-between"
@@ -115,11 +117,10 @@ export default function Appointments() {
 
       {/* Cancel modal */}
       {cancelId && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-[var(--card)] border border-[var(--border)] rounded-2xl w-full max-w-sm p-6">
-            <h3 className="text-lg font-bold mb-2">Cancelar agendamento?</h3>
+        <Modal titleId="cancel-appointment-title" onClose={() => setCancelId(null)}>
+            <h3 id="cancel-appointment-title" className="text-lg font-bold mb-2">Simular cancelamento?</h3>
             <p className="text-sm text-[var(--muted-foreground)] mb-6">
-              Esta ação não pode ser desfeita. Cancelamentos frequentes podem bloquear sua conta.
+              Apenas esta demonstração será alterada. Nenhum agendamento real será cancelado.
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setCancelId(null)}>
@@ -129,8 +130,7 @@ export default function Appointments() {
                 Cancelar agendamento
               </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   )
