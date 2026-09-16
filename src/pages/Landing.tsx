@@ -32,14 +32,14 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <Logo className="h-8 w-8 text-[var(--primary)]" />
-            <span className="font-bold text-lg tracking-tight">ErickCorttes</span>
+            <span className="font-display font-bold text-lg tracking-tight">ErickCorttes</span>
           </div>
           <div className="flex items-center gap-3">
             <Link to="/admin" className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors hidden sm:block">
               Área Admin
             </Link>
             <Button asChild size="sm">
-              <Link to="/client/schedule">Agendar</Link>
+              <Link to="/login">Agendar</Link>
             </Button>
           </div>
         </div>
@@ -58,23 +58,27 @@ export default function Landing() {
 
         <div className="max-w-4xl mx-auto text-center relative z-10">
           <DemoNotice />
-          <div className="inline-flex items-center gap-2 border border-[var(--primary)]/30 bg-[var(--primary)]/10 rounded-full px-4 py-1.5 text-sm text-[var(--primary)] font-medium mb-8">
+          <p className="text-xs sm:text-sm font-medium tracking-[0.2em] text-[var(--primary)] uppercase mb-4">
+            Estilo · Disciplina · Confiança
+          </p>
+
+          <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight leading-[1.05] mb-6">
+            Mais que um corte,<br />
+            <span className="text-[var(--primary)]">um estilo de vida.</span>
+          </h1>
+
+          <p className="text-[var(--muted-foreground)] text-lg md:text-xl max-w-xl mx-auto mb-6">
+            Barbearia premium com atendimento rápido e descomplicado. Explore o fluxo de agendamento pelo celular.
+          </p>
+
+          <div className="inline-flex items-center gap-2 border border-[var(--primary)]/30 bg-[var(--primary)]/10 rounded-full px-4 py-1.5 text-sm text-[var(--primary)] font-medium mb-4">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)] animate-pulse" />
             Explore o agendamento
           </div>
 
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tighter leading-none mb-6">
-            Estilo e precisão.<br />
-            <span className="text-[var(--primary)]">Sem complicação.</span>
-          </h1>
-
-          <p className="text-[var(--muted-foreground)] text-lg md:text-xl max-w-xl mx-auto mb-10">
-            Barbearia premium com atendimento rápido e descomplicado. Explore o fluxo de agendamento pelo celular.
-          </p>
-
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Button asChild size="lg" className="text-base h-12 px-8">
-              <Link to="/client/schedule">
+              <Link to="/login">
                 Agendar horário <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
@@ -114,14 +118,14 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
             <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Serviços</p>
-            <h2 className="text-3xl md:text-4xl font-bold tracking-tight">O que oferecemos</h2>
+            <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight">O que oferecemos</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {SERVICES.filter(s => s.active).map((service) => (
               <div
                 key={service.id}
-                className="group border border-[var(--border)] bg-[var(--card)] rounded-2xl p-6 hover:border-[var(--primary)]/50 transition-all hover:shadow-[0_0_20px_rgba(212,175,55,0.08)]"
+                className="group border border-[var(--border)] bg-[var(--card)] rounded-2xl p-6 hover:border-[var(--primary)]/50 transition-all hover:shadow-[0_0_20px_rgba(201,169,98,0.08)]"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/15 flex items-center justify-center">
@@ -143,7 +147,7 @@ export default function Landing() {
 
           <div className="text-center mt-10">
             <Button asChild size="lg">
-              <Link to="/client/schedule">
+              <Link to="/login">
                 Agendar agora <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
@@ -162,7 +166,7 @@ export default function Landing() {
           {/* Hours */}
           <div>
             <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Horários</p>
-            <h2 className="text-2xl font-bold tracking-tight mb-6">Funcionamento</h2>
+            <h2 className="font-display text-2xl font-bold tracking-tight mb-6">Funcionamento</h2>
             <div className="space-y-2">
               {BUSINESS_HOURS.map((h) => (
                 <div key={h.day} className="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
@@ -182,7 +186,7 @@ export default function Landing() {
           {/* Info */}
           <div>
             <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Localização</p>
-            <h2 className="text-2xl font-bold tracking-tight mb-6">Onde estamos</h2>
+            <h2 className="font-display text-2xl font-bold tracking-tight mb-6">Onde estamos</h2>
 
             <div className="space-y-4">
               <div className="flex items-start gap-3">
@@ -235,7 +239,7 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
             <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Depoimentos</p>
-            <h2 className="text-3xl font-bold tracking-tight">O que dizem nossos clientes</h2>
+            <h2 className="font-display text-3xl font-bold tracking-tight">O que dizem nossos clientes</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -263,14 +267,14 @@ export default function Landing() {
               <div className="w-64 h-64 rounded-full bg-[var(--primary)]/5 blur-3xl" />
             </div>
             <div className="relative z-10">
-              <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
+              <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight mb-4">
                 Pronto para o visual perfeito?
               </h2>
               <p className="text-[var(--muted-foreground)] mb-8 max-w-md mx-auto">
                 Agende agora em menos de 1 minuto. Sem cadastro complicado.
               </p>
               <Button asChild size="lg" className="text-base h-12 px-10">
-                <Link to="/client/schedule">
+                <Link to="/login">
                   Agendar horário <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
@@ -282,13 +286,16 @@ export default function Landing() {
       </main>
       {/* Footer */}
       <footer className="border-t border-[var(--border)] py-8 px-6">
-        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-[var(--muted-foreground)]">
+        <div className="max-w-5xl mx-auto flex flex-col items-center gap-4 text-sm text-[var(--muted-foreground)]">
           <div className="flex items-center gap-2">
             <Logo className="h-4 w-4 text-[var(--primary)]" />
-            <span className="font-medium text-[var(--foreground)]">ErickCorttes</span>
+            <span className="font-display font-semibold text-[var(--foreground)]">ErickCorttes</span>
           </div>
-          <p>© 2026 ErickCorttes. Todos os direitos reservados.</p>
-          <Link to="/admin" className="min-h-11 inline-flex items-center hover:text-[var(--foreground)] transition-colors">Área administrativa</Link>
+          <p className="text-xs tracking-widest uppercase text-[var(--primary)]/80">Mais que um corte, um estilo de vida</p>
+          <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
+            <p>© 2026 ErickCorttes. Todos os direitos reservados.</p>
+            <Link to="/admin" className="min-h-11 inline-flex items-center hover:text-[var(--foreground)] transition-colors">Área administrativa</Link>
+          </div>
         </div>
       </footer>
     </div>

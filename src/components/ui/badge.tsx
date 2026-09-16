@@ -5,7 +5,7 @@ export type BadgeVariant = 'default' | 'confirmed' | 'completed' | 'cancelled' |
 
 const variantClasses: Record<BadgeVariant, string> = {
   default: 'bg-[var(--secondary)] text-[var(--foreground)]',
-  confirmed: 'bg-[#D4AF37]/15 text-[#D4AF37] border border-[#D4AF37]/30',
+  confirmed: 'bg-[var(--primary)]/15 text-[var(--primary)] border border-[var(--primary)]/30',
   completed: 'bg-green-900/40 text-green-400 border border-green-800/40',
   cancelled: 'bg-red-900/40 text-red-400 border border-red-800/40',
   missed: 'bg-orange-900/40 text-orange-400 border border-orange-800/40',

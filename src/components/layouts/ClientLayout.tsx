@@ -22,7 +22,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       <header className="sticky top-0 z-20 bg-[var(--background)]/90 backdrop-blur border-b border-[var(--border)] px-4 py-3 flex items-center justify-center">
         <div className="flex items-center gap-2">
           <Logo className="h-6 w-6 text-[var(--primary)]" />
-          <span className="font-bold tracking-tight text-[var(--foreground)]">ErickCorttes</span>
+          <span className="font-display font-bold tracking-tight text-[var(--foreground)]">ErickCorttes</span>
         </div>
       </header>
 

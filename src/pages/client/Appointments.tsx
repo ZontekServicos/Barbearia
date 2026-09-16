@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarPlus, Clock, X } from 'lucide-react'
+import { Clock, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/Modal'
+import { Logo } from '@/components/Logo'
 import { APPOINTMENTS } from '@/data/mock'
 
 const today = '2026-09-15'
@@ -49,7 +50,7 @@ export default function Appointments() {
 
         {filteredUpcoming.length === 0 ? (
           <div className="border border-dashed border-[var(--border)] rounded-2xl p-8 text-center">
-            <CalendarPlus className="h-10 w-10 text-[var(--muted-foreground)]/50 mx-auto mb-3" />
+            <Logo className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
             <p className="text-[var(--muted-foreground)] text-sm mb-4">Você ainda não possui agendamentos futuros.</p>
             <Button asChild size="sm">
               <Link to="/client/schedule">Agendar agora</Link>

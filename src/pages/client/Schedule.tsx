@@ -83,7 +83,7 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
             className={cn(
               'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
               selected === service.id
-                ? 'border-[var(--primary)] bg-[var(--primary)]/10 shadow-[0_0_12px_rgba(212,175,55,0.15)]'
+                ? 'border-[var(--primary)] bg-[var(--primary)]/10 shadow-[0_0_12px_rgba(201,169,98,0.15)]'
                 : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/40'
             )}
           >
@@ -357,7 +357,7 @@ function SuccessStep({ service, date, time, onRestart }: { service: Service; dat
       <div className="w-20 h-20 rounded-full bg-[var(--primary)]/15 border-2 border-[var(--primary)]/40 flex items-center justify-center mx-auto mb-6">
         <Check className="h-10 w-10 text-[var(--primary)]" />
       </div>
-      <h2 className="text-2xl font-bold tracking-tight mb-2">Simulação concluída!</h2>
+      <h2 className="font-display text-2xl font-bold tracking-tight mb-2">Simulação concluída!</h2>
       <p className="text-[var(--muted-foreground)] text-sm mb-8">
         Você simulou{' '}
         <span className="text-[var(--foreground)] font-medium">{service.name}</span>{' '}

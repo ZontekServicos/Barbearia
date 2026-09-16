@@ -1,43 +1,46 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700;800&display=swap');
 @import 'tailwindcss';
 
 @theme {
   --font-sans: 'Inter', sans-serif;
+  --font-display: 'Playfair Display', Georgia, serif;
 }
 
 @layer base {
   :root {
-    --background: #0A0A0A;
-    --foreground: #F0E6D2;
+    /* ERICKCORTTES BARBEARIA — official brand palette */
+    --background: #0D0D0D; /* Preto profundo */
+    --foreground: #F5EBD2; /* Creme */
 
-    --card: #171512;
-    --card-foreground: #F0E6D2;
+    --card: #1A1A18; /* Carvão */
+    --card-foreground: #F5EBD2;
 
-    --primary: #D4AF37; /* Gold accent */
-    --primary-dark: #9C7A2E; /* Deeper bronze-gold for gradients/depth */
-    --primary-foreground: #0A0A0A;
+    --primary: #C9A962; /* Dourado principal */
+    --primary-light: #E1C77B; /* Dourado claro */
+    --primary-dark: #8E7A46; /* Bronze */
+    --primary-foreground: #0D0D0D;
 
-    --secondary: #211E17;
-    --secondary-foreground: #E5DCC8;
+    --secondary: #201F1A;
+    --secondary-foreground: #F5EBD2;
 
-    --muted: #211E17;
-    --muted-foreground: #A39B8B;
+    --muted: #201F1A;
+    --muted-foreground: #8D8B8D; /* Cinza neutro */
 
-    --accent: #D4AF37;
-    --accent-foreground: #0A0A0A;
+    --accent: #C9A962;
+    --accent-foreground: #0D0D0D;
 
-    --border: #302A1D;
-    --ring: #D4AF37;
+    --border: #2B2A22;
+    --ring: #C9A962;
 
     --radius: 0.5rem;
-    
+
     /* Additional custom properties for semantic colors */
     --success: #2E7D32;
     --success-foreground: #FFFFFF;
     --destructive: #C62828;
     --destructive-foreground: #FFFFFF;
     --warning: #F9A825;
-    --warning-foreground: #111111;
+    --warning-foreground: #0D0D0D;
   }
 
   * {
@@ -64,6 +67,10 @@
       transition: none !important;
       scroll-behavior: auto !important;
     }
+  }
+
+  h1, h2 {
+    font-family: var(--font-display);
   }
 
   body {

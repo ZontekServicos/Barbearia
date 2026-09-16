@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { CalendarPlus, Clock, Scissors } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/badge'
+import { Logo } from '@/components/Logo'
 import { APPOINTMENTS, SERVICES } from '@/data/mock'
 
 const upcoming = APPOINTMENTS
@@ -49,6 +50,7 @@ export default function ClientHome() {
 
         {upcoming.length === 0 ? (
           <div className="border border-dashed border-[var(--border)] rounded-xl p-6 text-center">
+            <Logo className="h-8 w-8 text-[var(--muted-foreground)]/40 mx-auto mb-2" />
             <p className="text-sm text-[var(--muted-foreground)]">Nenhum agendamento futuro.</p>
           </div>
         ) : (

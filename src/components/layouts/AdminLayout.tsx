@@ -44,7 +44,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="p-6 border-b border-[var(--border)]">
           <div className="flex items-center gap-2">
             <Logo className="h-7 w-7 text-[var(--primary)]" />
-            <span className="font-bold tracking-tight text-[var(--primary)] text-lg">ErickCorttes</span>
+            <span className="font-display font-bold tracking-tight text-[var(--primary)] text-lg">ErickCorttes</span>
           </div>
           <p className="text-xs text-[var(--muted-foreground)] mt-1 ml-9">Painel do Barbeiro</p>
         </div>
@@ -96,7 +96,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Logo className="h-7 w-7 text-[var(--primary)]" />
-            <span className="font-bold tracking-tight text-[var(--primary)]">ErickCorttes</span>
+            <span className="font-display font-bold tracking-tight text-[var(--primary)]">ErickCorttes</span>
           </div>
           <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="w-11 h-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
             <X className="h-5 w-5" />

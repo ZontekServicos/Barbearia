@@ -4,6 +4,7 @@ import { ArrowLeft, Phone, MessageSquare, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DemoNotice } from '@/components/DemoNotice'
 import { Input } from '@/components/ui/input'
+import { Logo } from '@/components/Logo'
 
 type Step = 'phone' | 'otp' | 'register'
 
@@ -84,6 +85,13 @@ export default function Login() {
     <main className="min-h-dvh bg-[var(--background)] flex flex-col items-center justify-center px-6 py-12">
       <div className="w-full max-w-sm">
         <DemoNotice />
+        {/* Brand */}
+        <div className="flex flex-col items-center gap-2 mb-8">
+          <Logo className="h-9 w-9 text-[var(--primary)]" />
+          <span className="font-display font-bold text-lg tracking-tight">ErickCorttes</span>
+          <p className="text-xs tracking-widest uppercase text-[var(--muted-foreground)]">Estilo · Disciplina · Confiança</p>
+        </div>
+
         {/* Back */}
         <button
           disabled={loading}
@@ -94,7 +102,7 @@ export default function Login() {
           Voltar
         </button>
 
-        {/* Logo */}
+        {/* Step icon */}
         <div className="mb-8 text-center">
           <div className="w-12 h-12 rounded-2xl bg-[var(--primary)]/15 border border-[var(--primary)]/30 flex items-center justify-center mx-auto mb-4">
             {step === 'phone' && <Phone className="h-6 w-6 text-[var(--primary)]" />}
@@ -104,13 +112,13 @@ export default function Login() {
 
           {step === 'phone' && (
             <>
-              <h1 className="text-2xl font-bold tracking-tight">Qual é o seu número?</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">Qual é o seu número?</h1>
               <p className="text-sm text-[var(--muted-foreground)] mt-2">Use um número de exemplo. Nenhuma mensagem será enviada.</p>
             </>
           )}
           {step === 'otp' && (
             <>
-              <h1 className="text-2xl font-bold tracking-tight">Digite o código</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">Digite o código</h1>
               <p className="text-sm text-[var(--muted-foreground)] mt-2">
                 Simulação para<br />
                 <span className="text-[var(--foreground)] font-medium">{phone}</span>
@@ -119,7 +127,7 @@ export default function Login() {
           )}
           {step === 'register' && (
             <>
-              <h1 className="text-2xl font-bold tracking-tight">Primeiro acesso</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">Primeiro acesso</h1>
               <p className="text-sm text-[var(--muted-foreground)] mt-2">Precisamos de mais algumas informações.</p>
             </>
           )}
