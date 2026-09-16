@@ -1,8 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { Home, CalendarPlus, Clock, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { DemoNotice } from '@/components/DemoNotice'
-import { Logo } from '@/components/Logo'
 
 const navItems = [
   { to: '/client', label: 'Início', icon: Home, exact: true },
@@ -18,19 +16,20 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     exact ? location.pathname === to : location.pathname.startsWith(to)
 
   return (
-    <div className="min-h-screen bg-[var(--background)] flex flex-col">
+    <div className="relative isolate min-h-screen flex flex-col">
+      <div aria-hidden="true" className="fixed inset-0 -z-10 pointer-events-none">
+        <img src="/brand/interior.jpg" alt="" width="1536" height="1024" className="h-full w-full object-cover object-[68%_center] md:object-center" />
+        <div className="absolute inset-0 bg-black/80" />
+      </div>
       <header className="sticky top-0 z-20 bg-[var(--background)]/90 backdrop-blur px-4 py-3 flex items-center justify-center">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 flex items-center justify-center shrink-0">
-            <Logo className="h-5 w-5 text-[var(--primary)]" />
-          </div>
+          <img src="/brand/app-icon.png" alt="" width="256" height="256" className="h-10 w-10 object-contain shrink-0" />
           <span className="font-display font-bold tracking-tight text-[var(--foreground)]">ErickCorttes</span>
         </div>
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--primary)]/40 to-transparent" />
       </header>
 
       <main className="flex-1 max-w-md mx-auto w-full px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
-        <DemoNotice />
         {children}
       </main>
 
