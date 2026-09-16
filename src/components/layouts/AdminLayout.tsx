@@ -6,8 +6,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { containDialogFocus } from '@/components/ui/Modal'
-import { DemoNotice } from '@/components/DemoNotice'
-import { Logo } from '@/components/Logo'
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
@@ -38,15 +36,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     exact ? location.pathname === to : location.pathname.startsWith(to)
 
   return (
-    <div className="min-h-screen bg-[var(--background)] flex">
+    <div className="relative isolate min-h-screen flex">
+      <div aria-hidden="true" className="fixed inset-0 -z-10 pointer-events-none">
+        <img src="/brand/interior.jpg" alt="" width="1536" height="1024" className="h-full w-full object-cover object-[68%_center] md:object-center" />
+        <div className="absolute inset-0 bg-black/80" />
+      </div>
       {/* Sidebar desktop */}
       <aside className="hidden md:flex w-60 flex-col border-r border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] flex-shrink-0">
         <div className="p-6 border-b border-[var(--border)]">
           <div className="flex items-center gap-2">
-            <Logo className="h-7 w-7 text-[var(--primary)]" />
+            <img src="/brand/app-icon.png" alt="" width="256" height="256" className="h-10 w-10 object-contain shrink-0" />
             <span className="font-display font-bold tracking-tight text-[var(--primary)] text-lg">ErickCorttes</span>
           </div>
-          <p className="text-xs text-[var(--muted-foreground)] mt-1 ml-9">Painel do Barbeiro</p>
+          <p className="text-xs text-[var(--muted-foreground)] mt-1 ml-12">Painel do Barbeiro</p>
         </div>
 
         <nav className="flex-1 p-3 flex flex-col gap-1">
@@ -95,7 +97,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Logo className="h-7 w-7 text-[var(--primary)]" />
+            <img src="/brand/app-icon.png" alt="" width="256" height="256" className="h-10 w-10 object-contain shrink-0" />
             <span className="font-display font-bold tracking-tight text-[var(--primary)]">ErickCorttes</span>
           </div>
           <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="w-11 h-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
@@ -140,13 +142,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <Menu className="h-5 w-5" />
           </button>
           <div className="flex items-center gap-2">
-            <Logo className="h-5 w-5 text-[var(--primary)]" />
+            <img src="/brand/app-icon.png" alt="" width="256" height="256" className="h-9 w-9 object-contain shrink-0" />
             <span className="font-bold tracking-tight text-sm">Painel Admin</span>
           </div>
         </header>
 
         <main className="flex-1 p-4 md:p-8 overflow-auto">
-          <DemoNotice />
           {children}
         </main>
       </div>
