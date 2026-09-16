@@ -19,7 +19,7 @@ export default function Landing() {
       <header className="fixed top-0 left-0 right-0 z-20 bg-[var(--background)]/85 backdrop-blur-md">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <img src="/brand/logo-principal.jpg" alt="" width="1024" height="1536" className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover object-[center_45%] mix-blend-screen shrink-0" />
+            <img src="/brand/app-icon.png" alt="" width="256" height="256" className="w-12 h-12 sm:w-14 sm:h-14 object-contain shrink-0" />
             <div className="flex flex-col leading-none">
               <span className="font-display font-bold text-lg sm:text-xl tracking-tight">ErickCorttes</span>
               <span className="hidden sm:block text-[10px] tracking-[0.25em] text-[var(--muted-foreground)] uppercase mt-1">Barbearia</span>
