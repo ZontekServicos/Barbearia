@@ -43,17 +43,23 @@ export default function Landing() {
       <main>
       {/* Hero */}
       <section className="relative overflow-hidden pt-28 sm:pt-36 pb-14 sm:pb-24 px-6">
-        <img src="/brand/interior.jpg" alt="" aria-hidden="true" fetchPriority="high" width="1536" height="1024" className="absolute inset-0 h-full w-full object-cover object-[65%_center] md:object-center pointer-events-none" />
-        <div aria-hidden="true" className="absolute inset-0 pointer-events-none bg-[linear-gradient(180deg,rgba(13,13,13,0.25),rgba(13,13,13,0.72)_48%,#0D0D0D_100%)]" />
+        <img src="/brand/interior.jpg" alt="" aria-hidden="true" fetchPriority="high" width="1536" height="1024" className="absolute inset-0 h-full w-full object-cover object-[68%_center] md:object-center pointer-events-none" />
+        <div aria-hidden="true" className="absolute inset-0 pointer-events-none bg-[linear-gradient(180deg,rgba(13,13,13,0.40)_0%,rgba(13,13,13,0.74)_45%,rgba(13,13,13,0.93)_82%,#0D0D0D_100%)]" />
 
-        <div className="max-w-4xl mx-auto text-center relative z-10">
+        {/* No z-index here: a stacking context would isolate the logo's blend mode from the photo behind it. */}
+        <div className="max-w-4xl mx-auto text-center relative">
           <div className="flex justify-center"><DemoNotice /></div>
-          <div className="w-20 h-20 rounded-full border border-[var(--primary)]/30 bg-[var(--background)]/60 flex items-center justify-center mx-auto mb-3">
-            <Logo className="h-14 w-14 text-[var(--primary)]" />
-          </div>
 
-          <p className="font-display text-xl sm:text-2xl font-bold tracking-widest text-[var(--foreground)] mb-1">ERICKCORTTES</p>
-          <p className="text-[10px] tracking-[0.4em] text-[var(--primary-light)] mb-6">BARBEARIA</p>
+          {/* Main brand logo — the JPEG's black canvas is knocked out by screen blending,
+              with the circular crop as a fallback if blend modes are unavailable. */}
+          <img
+            src="/brand/logo-principal.jpg"
+            alt="ErickCorttes Barbearia"
+            width="1024"
+            height="1536"
+            fetchPriority="high"
+            className="w-44 h-44 sm:w-56 sm:h-56 rounded-full object-cover object-[center_45%] mx-auto mb-6 mix-blend-screen"
+          />
 
           <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight leading-[1.1] mb-5">
             Mais que um corte,<br />
