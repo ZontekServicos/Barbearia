@@ -6,7 +6,7 @@ import { Badge, StatusBadge } from '@/components/ui/badge'
 import { CLIENTS, APPOINTMENTS } from '@/data/mock'
 
 function formatDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
+  const [, m, d] = dateStr.split('-')
   const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
   return `${d} ${months[parseInt(m) - 1]}`
 }
@@ -69,7 +69,7 @@ export default function ClientProfile() {
           <span className="text-2xl font-bold text-[var(--primary)]">{client.name[0]}</span>
         </div>
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold">{client.name}</h2>
             {blocked && <Badge variant="blocked">Bloqueado</Badge>}
           </div>
@@ -112,7 +112,7 @@ export default function ClientProfile() {
           { label: 'Concluídos', value: client.completedAppointments, icon: Star, color: 'text-green-400' },
           { label: 'Cancelamentos', value: client.cancelledAppointments, icon: XCircle, color: 'text-orange-400' },
           { label: 'Faltas', value: client.missedAppointments, icon: AlertTriangle, color: 'text-red-400' },
-        ].map(({ label, value, icon: Icon, color }) => (
+        ].map(({ label, value, color }) => (
           <div key={label} className="border border-[var(--border)] bg-[var(--card)] rounded-xl p-4 text-center">
             <div className={`text-2xl font-bold ${color} mb-1`}>{value}</div>
             <p className="text-xs text-[var(--muted-foreground)]">{label}</p>
@@ -136,6 +136,7 @@ export default function ClientProfile() {
         </div>
         {editingNote ? (
           <textarea
+            aria-label="Observações do cliente"
             value={note}
             onChange={e => setNote(e.target.value)}
             rows={3}

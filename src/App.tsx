@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 
 // Layouts
 import ClientLayout from './components/layouts/ClientLayout'
@@ -78,6 +78,12 @@ export default function App() {
           path="/admin/settings"
           element={<AdminLayout><AdminSettings /></AdminLayout>}
         />
+        <Route path="*" element={
+          <main className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center">
+            <h1 className="text-2xl font-bold">Página não encontrada</h1>
+            <Link to="/" className="text-[var(--primary)] underline">Voltar ao início</Link>
+          </main>
+        } />
       </Routes>
     </BrowserRouter>
   )

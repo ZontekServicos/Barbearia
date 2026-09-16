@@ -58,6 +58,7 @@ export default function Clients() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--muted-foreground)]" />
         <input
           type="text"
+          aria-label="Buscar clientes"
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Buscar por nome ou telefone..."

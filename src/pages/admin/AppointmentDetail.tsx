@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Phone, User, Scissors, Clock, Calendar, DollarSign, CheckCircle, XCircle, AlertCircle, Edit } from 'lucide-react'
+import { ArrowLeft, Phone, User, Scissors, Clock, Calendar, DollarSign, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
 import { APPOINTMENTS } from '@/data/mock'

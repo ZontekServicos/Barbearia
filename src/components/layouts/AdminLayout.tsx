@@ -80,6 +80,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Mobile sidebar */}
       <aside
+        inert={!mobileOpen}
         className={cn(
           'fixed inset-y-0 left-0 z-40 w-64 bg-[var(--card)] border-r border-[var(--border)] flex flex-col transition-transform duration-300 md:hidden',
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
@@ -92,7 +93,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
             <span className="font-bold tracking-tight text-[var(--primary)]">Cuts & Co.</span>
           </div>
-          <button onClick={() => setMobileOpen(false)} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -124,6 +125,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* Mobile header */}
         <header className="md:hidden sticky top-0 z-20 bg-[var(--card)]/90 backdrop-blur border-b border-[var(--border)] px-4 py-3 flex items-center gap-3">
           <button
+            aria-label="Abrir menu"
+            aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
             className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
           >

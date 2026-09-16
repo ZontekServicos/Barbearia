@@ -22,7 +22,7 @@ function ServiceForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    onSave({ name, description, price: Number(price), duration: Number(duration), active: true })
+    onSave({ name, description, price: Number(price), duration: Number(duration), active: initial?.active ?? true })
   }
 
   return (
@@ -34,7 +34,7 @@ function ServiceForm({
         <div className="col-span-2">
           <Input label="Descrição" value={description} onChange={e => setDescription(e.target.value)} placeholder="Breve descrição" />
         </div>
-        <Input label="Preço (R$)" type="number" min="1" value={price} onChange={e => setPrice(e.target.value)} placeholder="35" required />
+        <Input label="Preço (R$)" type="number" min="1" step="0.01" value={price} onChange={e => setPrice(e.target.value)} placeholder="35" required />
         <Input label="Duração (min)" type="number" min="5" value={duration} onChange={e => setDuration(e.target.value)} placeholder="40" required />
       </div>
       <div className="flex gap-2 pt-1">
@@ -42,7 +42,7 @@ function ServiceForm({
           <Check className="h-4 w-4 mr-1.5" />
           {initial?.id ? 'Salvar alterações' : 'Criar serviço'}
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onCancel}>
+        <Button type="button" size="sm" variant="outline" aria-label="Cancelar edição" onClick={onCancel}>
           <X className="h-4 w-4" />
         </Button>
       </div>
@@ -133,12 +133,14 @@ export default function Services() {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
+                      aria-label={`Editar ${service.name}`}
                       onClick={() => setEditingId(service.id)}
                       className="p-1.5 rounded-lg hover:bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
                     >
                       <Edit2 className="h-4 w-4" />
                     </button>
                     <button
+                      aria-label={`Excluir ${service.name}`}
                       onClick={() => setDeleteId(service.id)}
                       className="p-1.5 rounded-lg hover:bg-red-900/30 text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                     >

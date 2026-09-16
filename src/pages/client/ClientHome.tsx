@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import { CalendarPlus, Clock, Scissors } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
 import { APPOINTMENTS, SERVICES } from '@/data/mock'
 
@@ -10,8 +9,7 @@ const upcoming = APPOINTMENTS
   .slice(0, 2)
 
 function formatDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
-  const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+  const [, m, d] = dateStr.split('-')
   return `${d}/${m}`
 }
 

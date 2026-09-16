@@ -18,7 +18,7 @@ const history = APPOINTMENTS
   .sort((a, b) => b.date.localeCompare(a.date))
 
 function formatDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
+  const [, m, d] = dateStr.split('-')
   const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
   return `${d} de ${months[parseInt(m) - 1]}`
 }
@@ -121,7 +121,7 @@ export default function Appointments() {
             <p className="text-sm text-[var(--muted-foreground)] mb-6">
               Esta ação não pode ser desfeita. Cancelamentos frequentes podem bloquear sua conta.
             </p>
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setCancelId(null)}>
                 Manter
               </Button>

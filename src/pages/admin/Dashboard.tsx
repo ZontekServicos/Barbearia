@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import {
   CalendarPlus, UserPlus, Scissors, TrendingUp,
-  Calendar, Users, XCircle, AlertCircle
+  Calendar, XCircle, AlertCircle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
@@ -68,7 +68,7 @@ export default function Dashboard() {
 
       {/* Upcoming appointments */}
       <div>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h3 className="text-lg font-semibold tracking-tight">Próximos atendimentos</h3>
           <Link to="/admin/agenda" className="text-sm text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors">
             Ver agenda completa →

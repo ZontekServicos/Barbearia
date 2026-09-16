@@ -1,10 +1,15 @@
 {
-  "description": "This web application streamlines communication by enabling users to send polite requests and reminders, enhancing collaboration and efficiency in team settings.",
+  "description": "Serviços, horários e agendamento da barbearia Cuts & Co.",
   "robots": {
     "index": false
   },
   "accessibility": {
     "addBypassLinks": false,
     "ignoreReducedMotion": false
+  },
+  "title": "Cuts & Co. | Barbearia",
+  "language": "pt-BR",
+  "icons": {
+    "icon": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Ctext%20y%3D%2226%22%20font-size%3D%2226%22%3E%E2%9C%82%3C%2Ftext%3E%3C%2Fsvg%3E"
   }
 }

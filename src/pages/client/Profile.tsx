@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { User, Phone, Scissors, Star, AlertTriangle, LogOut } from 'lucide-react'
+import { Phone, Scissors, Star, AlertTriangle, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { APPOINTMENTS } from '@/data/mock'
 

@@ -6,6 +6,7 @@ import { BUSINESS_HOURS } from '@/data/mock'
 import { cn } from '@/lib/utils'
 
 export default function Settings() {
+  const [allowCancellation, setAllowCancellation] = useState(true)
   const [saved, setSaved] = useState(false)
   const [hours, setHours] = useState(BUSINESS_HOURS)
 
@@ -60,8 +61,10 @@ export default function Settings() {
         </div>
         <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl overflow-hidden">
           {hours.map((h, i) => (
-            <div key={h.day} className={cn('flex items-center gap-3 px-5 py-3.5', i < hours.length - 1 && 'border-b border-[var(--border)]')}>
+            <div key={h.day} className={cn('flex flex-wrap items-center gap-3 px-5 py-3.5', i < hours.length - 1 && 'border-b border-[var(--border)]')}>
               <button
+                aria-label={`Abrir ${h.day}`}
+                aria-pressed={h.open}
                 onClick={() => toggleDay(i)}
                 className={cn(
                   'w-10 h-5 rounded-full transition-colors shrink-0 relative',
@@ -77,9 +80,10 @@ export default function Settings() {
                 {h.day}
               </span>
               {h.open ? (
-                <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 w-full sm:w-auto sm:flex-1">
                   <input
                     type="time"
+                    aria-label={`Abertura ${h.day}`}
                     value={h.start}
                     onChange={e => updateHour(i, 'start', e.target.value)}
                     className="bg-[var(--secondary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)] w-28"
@@ -87,6 +91,7 @@ export default function Settings() {
                   <span className="text-[var(--muted-foreground)] text-sm">–</span>
                   <input
                     type="time"
+                    aria-label={`Fechamento ${h.day}`}
                     value={h.end}
                     onChange={e => updateHour(i, 'end', e.target.value)}
                     className="bg-[var(--secondary)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)] w-28"
@@ -120,8 +125,8 @@ export default function Settings() {
               <p className="text-sm font-medium">Permitir cancelamento pelo cliente</p>
               <p className="text-xs text-[var(--muted-foreground)]">Clientes podem cancelar pelo app</p>
             </div>
-            <button className="w-10 h-5 rounded-full bg-[var(--primary)] relative shrink-0">
-              <span className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-white shadow" />
+            <button aria-label="Permitir cancelamento pelo cliente" aria-pressed={allowCancellation} onClick={() => setAllowCancellation(value => !value)} className={cn("w-10 h-5 rounded-full relative shrink-0", allowCancellation ? "bg-[var(--primary)]" : "bg-[var(--secondary)]")}>
+              <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white shadow", allowCancellation ? "right-0.5" : "left-0.5")} />
             </button>
           </div>
         </div>

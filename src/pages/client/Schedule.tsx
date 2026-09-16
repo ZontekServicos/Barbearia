@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Check, Scissors, Clock, Calendar,
+  ArrowLeft, Check, Scissors, Clock,
   CalendarCheck, ChevronLeft, ChevronRight
 } from 'lucide-react'
 import {
@@ -147,7 +147,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -160,6 +160,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
         {/* Month header */}
         <div className="flex items-center justify-between mb-4">
           <button
+            aria-label="Mês anterior"
             onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
             className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors"
           >
@@ -169,6 +170,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
             {format(currentMonth, "MMMM 'de' yyyy", { locale: ptBR })}
           </span>
           <button
+            aria-label="Próximo mês"
             onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
             className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors"
           >
@@ -240,7 +242,7 @@ function TimeStep({
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -302,7 +304,7 @@ function ConfirmStep({
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -343,7 +345,7 @@ function ConfirmStep({
   )
 }
 
-function SuccessStep({ service, date, time }: { service: Service; date: Date; time: string }) {
+function SuccessStep({ service, date, time, onRestart }: { service: Service; date: Date; time: string; onRestart: () => void }) {
   const navigate = useNavigate()
   return (
     <div className="text-center py-6">
@@ -367,7 +369,7 @@ function SuccessStep({ service, date, time }: { service: Service; date: Date; ti
         <Button className="w-full h-11" onClick={() => navigate('/client/appointments')}>
           Ver meus agendamentos
         </Button>
-        <Button variant="outline" className="w-full h-11" onClick={() => navigate('/client/schedule')}>
+        <Button variant="outline" className="w-full h-11" onClick={onRestart}>
           Fazer outro agendamento
         </Button>
         <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" onClick={() => navigate('/')}>
@@ -393,7 +395,7 @@ export default function Schedule() {
   }
 
   if (step === 'success' && service && date && time) {
-    return <SuccessStep service={service} date={date} time={time} />
+    return <SuccessStep service={service} date={date} time={time} onRestart={() => { setService(null); setDate(null); setTime(null); setStep('service') }} />
   }
 
   return (

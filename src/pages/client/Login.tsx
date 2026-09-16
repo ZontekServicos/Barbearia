@@ -123,7 +123,7 @@ export default function Login() {
 
         {/* Step indicators */}
         <div className="flex gap-1.5 justify-center mb-8">
-          {(['phone', 'otp', 'register'] as Step[]).map((s, i) => (
+          {(['phone', 'otp', 'register'] as Step[]).map(s => (
             <div
               key={s}
               className={`h-1 rounded-full transition-all ${
@@ -170,6 +170,7 @@ export default function Login() {
                     ref={el => { otpRefs.current[i] = el }}
                     type="text"
                     inputMode="numeric"
+                    aria-label={`Dígito ${i + 1} do código`}
                     maxLength={1}
                     value={digit}
                     onChange={e => handleOtpChange(i, e.target.value)}

@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { addDays, addWeeks, format, parseISO, startOfWeek } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
 import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, List, LayoutList, CalendarDays } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/badge'
@@ -7,17 +9,8 @@ import { cn } from '@/lib/utils'
 
 type View = 'day' | 'list'
 
-const DAYS = [
-  { label: 'Seg', date: '2026-09-14' },
-  { label: 'Ter', date: '2026-09-15' },
-  { label: 'Qua', date: '2026-09-16' },
-  { label: 'Qui', date: '2026-09-17' },
-  { label: 'Sex', date: '2026-09-18' },
-  { label: 'Sáb', date: '2026-09-19' },
-]
-
 function formatDisplayDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
+  const [, m, d] = dateStr.split('-')
   const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
   return `${d} de ${months[parseInt(m) - 1]}`
 }
@@ -40,8 +33,12 @@ export default function Agenda() {
     .filter(a => a.date === selectedDate)
     .sort((a, b) => a.time.localeCompare(b.time))
 
-  const allApts = APPOINTMENTS
-    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+  const weekStart = startOfWeek(parseISO(selectedDate), { weekStartsOn: 1 })
+  const days = Array.from({ length: 6 }, (_, i) => {
+    const day = addDays(weekStart, i)
+    return { label: format(day, 'EEE', { locale: ptBR }), date: format(day, 'yyyy-MM-dd') }
+  })
+  const dates = [...new Set(APPOINTMENTS.map(a => a.date))].sort()
 
   return (
     <div className="max-w-4xl">
@@ -53,6 +50,7 @@ export default function Agenda() {
         </div>
         <div className="flex items-center gap-1 border border-[var(--border)] bg-[var(--card)] rounded-lg p-1">
           <button
+            aria-label="Visualizar por dia"
             onClick={() => setView('day')}
             className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors', view === 'day' ? 'bg-[var(--primary)] text-black' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]')}
           >
@@ -60,6 +58,7 @@ export default function Agenda() {
             <span className="hidden sm:inline">Dia</span>
           </button>
           <button
+            aria-label="Visualizar lista"
             onClick={() => setView('list')}
             className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors', view === 'list' ? 'bg-[var(--primary)] text-black' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]')}
           >
@@ -75,16 +74,16 @@ export default function Agenda() {
           {/* Week strip */}
           <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-4 mb-6">
             <div className="flex items-center justify-between mb-3">
-              <button className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors">
+              <button aria-label="Semana anterior" onClick={() => setSelectedDate(format(addWeeks(parseISO(selectedDate), -1), 'yyyy-MM-dd'))} className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors">
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="text-sm font-medium">Semana de 14–19 set 2026</span>
-              <button className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors">
+              <span className="text-sm font-medium">{format(weekStart, 'dd/MM')} – {format(addDays(weekStart, 5), 'dd/MM/yyyy')}</span>
+              <button aria-label="Próxima semana" onClick={() => setSelectedDate(format(addWeeks(parseISO(selectedDate), 1), 'yyyy-MM-dd'))} className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors">
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
             <div className="grid grid-cols-6 gap-1">
-              {DAYS.map(({ label, date }) => {
+              {days.map(({ label, date }) => {
                 const count = APPOINTMENTS.filter(a => a.date === date).length
                 const isSelected = date === selectedDate
                 return (
@@ -155,7 +154,7 @@ export default function Agenda() {
       {/* List view */}
       {view === 'list' && (
         <div className="space-y-6">
-          {['2026-09-15', '2026-09-18', '2026-09-25'].map(date => {
+          {dates.map(date => {
             const apts = APPOINTMENTS.filter(a => a.date === date).sort((a, b) => a.time.localeCompare(b.time))
             if (apts.length === 0) return null
             return (
