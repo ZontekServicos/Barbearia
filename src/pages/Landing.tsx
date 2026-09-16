@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import {
   ArrowRight, Scissors, Clock, MapPin,
   Phone, ChevronRight, AtSign,
-  ShieldCheck
+  ShieldCheck, CalendarDays, CalendarCheck
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DemoNotice } from '@/components/DemoNotice'
@@ -42,18 +42,25 @@ export default function Landing() {
 
       <main>
       {/* Hero */}
-      <section className="pt-28 sm:pt-36 pb-12 sm:pb-20 px-6">
-        <div className="max-w-4xl mx-auto text-center">
+      <section className="relative overflow-hidden pt-28 sm:pt-36 pb-14 sm:pb-24 px-6">
+        <img src="/brand/interior.jpg" alt="" aria-hidden="true" fetchPriority="high" width="1536" height="1024" className="absolute inset-0 h-full w-full object-cover object-[65%_center] md:object-center pointer-events-none" />
+        <div aria-hidden="true" className="absolute inset-0 pointer-events-none bg-[linear-gradient(180deg,rgba(13,13,13,0.25),rgba(13,13,13,0.72)_48%,#0D0D0D_100%)]" />
+
+        <div className="max-w-4xl mx-auto text-center relative z-10">
           <div className="flex justify-center"><DemoNotice /></div>
-          <div className="w-14 h-14 rounded-full border border-[var(--primary)]/30 flex items-center justify-center mx-auto mb-6">
-            <Logo className="h-8 w-8 text-[var(--primary)]" />
+          <div className="w-20 h-20 rounded-full border border-[var(--primary)]/30 bg-[var(--background)]/60 flex items-center justify-center mx-auto mb-3">
+            <Logo className="h-14 w-14 text-[var(--primary)]" />
           </div>
+
+          <p className="font-display text-xl sm:text-2xl font-bold tracking-widest text-[var(--foreground)] mb-1">ERICKCORTTES</p>
+          <p className="text-[10px] tracking-[0.4em] text-[var(--primary-light)] mb-6">BARBEARIA</p>
+
           <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight leading-[1.1] mb-5">
             Mais que um corte,<br />
             <span className="text-[var(--primary)]">um estilo de vida.</span>
           </h1>
-          <p className="text-[var(--muted-foreground)] text-base md:text-lg max-w-md mx-auto mb-7">
-            Seu estilo, seu horário. Escolha o serviço e encontre um horário para você.
+          <p className="text-[var(--foreground)] text-base md:text-lg max-w-md mx-auto mb-7">
+            Agende seu horário pelo celular de forma rápida e sem complicação.
           </p>
           <Button asChild size="lg" className="w-full sm:w-auto text-base h-12 px-8">
             <Link to="/login">Agendar horário <ArrowRight className="ml-2 h-4 w-4" /></Link>
@@ -116,6 +123,40 @@ export default function Landing() {
                 Agendar agora <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
+          </div>
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="max-w-5xl mx-auto px-6">
+        <div className="h-px bg-gradient-to-r from-transparent via-[var(--border)] to-transparent" />
+      </div>
+
+      {/* How it works */}
+      <section id="como-funciona" className="py-12 sm:py-16 px-6">
+        <div className="max-w-4xl mx-auto">
+          <div className="text-center mb-12">
+            <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Como funciona</p>
+            <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight">Agendar é simples</h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            {[
+              { icon: Scissors, step: '1', title: 'Escolha o serviço', text: 'Selecione o corte, barba ou combo que você precisa.' },
+              { icon: CalendarDays, step: '2', title: 'Selecione o horário', text: 'Escolha um dia e horário na agenda de exemplo.' },
+              { icon: CalendarCheck, step: '3', title: 'Confirme', text: 'Revise os detalhes e conclua a simulação.' },
+            ].map(({ icon: Icon, step, title, text }) => (
+              <div key={step} className="relative pl-16 sm:pl-0 sm:text-center">
+                <div className="w-14 h-14 rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 flex items-center justify-center absolute left-0 top-0 sm:relative sm:mx-auto sm:mb-4">
+                  <Icon className="h-6 w-6 text-[var(--primary)]" />
+                  <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] text-[11px] font-bold flex items-center justify-center">
+                    {step}
+                  </span>
+                </div>
+                <h3 className="font-semibold text-base mb-1.5">{title}</h3>
+                <p className="text-sm text-[var(--muted-foreground)]">{text}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
