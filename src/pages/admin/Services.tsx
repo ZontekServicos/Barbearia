@@ -119,7 +119,7 @@ export default function Services() {
                 onCancel={() => setEditingId(null)}
               />
             ) : (
-              <div className={`border rounded-2xl p-5 transition-all ${service.active ? 'border-[var(--border)] bg-[var(--card)]' : 'border-[var(--border)]/50 bg-[var(--card)]/50'}`}>
+              <div className={`border rounded-2xl p-5 transition-all ${service.active ? 'border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)]' : 'border-[var(--border)]/50 bg-[var(--card)]/50'}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center">

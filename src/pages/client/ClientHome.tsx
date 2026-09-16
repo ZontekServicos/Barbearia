@@ -56,7 +56,7 @@ export default function ClientHome() {
         ) : (
           <div className="space-y-3">
             {upcoming.map(apt => (
-              <div key={apt.id} className="border border-[var(--border)] bg-[var(--card)] rounded-xl p-4 flex items-center justify-between">
+              <div key={apt.id} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4 flex items-center justify-between">
                 <div>
                   <p className="font-semibold text-sm">{apt.serviceName}</p>
                   <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] mt-0.5">
@@ -79,7 +79,7 @@ export default function ClientHome() {
             <Link
               key={service.id}
               to="/client/schedule"
-              className="border border-[var(--border)] bg-[var(--card)] rounded-xl p-3 hover:border-[var(--primary)]/40 transition-all"
+              className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-3 hover:border-[var(--primary)]/40 transition-all"
             >
               <div className="w-8 h-8 rounded-lg bg-[var(--secondary)] flex items-center justify-center mb-2">
                 <Scissors className="h-4 w-4 text-[var(--primary)]" />

@@ -83,8 +83,8 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
             className={cn(
               'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
               selected === service.id
-                ? 'border-[var(--primary)] bg-[var(--primary)]/10 shadow-[0_0_12px_rgba(201,169,98,0.15)]'
-                : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/40'
+                ? 'border-[var(--primary)] bg-[var(--primary)]/10'
+                : 'border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/40'
             )}
           >
             <div className="flex items-center gap-3">
@@ -157,7 +157,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
         </div>
       </div>
 
-      <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-4 mb-6">
+      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
         {/* Month header */}
         <div className="flex items-center justify-between mb-4">
           <button
@@ -256,7 +256,7 @@ function TimeStep({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 mb-6">
+      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mb-6">
         {AVAILABLE_TIMES.map(time => {
           const isOccupied = occupied.includes(time)
           const isSelected = selected === time
@@ -268,10 +268,10 @@ function TimeStep({
               disabled={isOccupied}
               onClick={() => setSelected(time)}
               className={cn(
-                'py-3 rounded-xl text-sm font-medium border transition-all',
-                isSelected && 'bg-[var(--primary)] text-black border-[var(--primary)] font-bold',
-                !isSelected && !isOccupied && 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/40 text-[var(--foreground)]',
-                isOccupied && 'border-[var(--border)] bg-[var(--secondary)]/50 text-[var(--muted-foreground)]/40 cursor-not-allowed line-through'
+                'py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
+                isSelected && 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]',
+                !isSelected && !isOccupied && 'border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/5 text-[var(--foreground)]',
+                isOccupied && 'border-[var(--border)]/60 bg-[var(--secondary)]/40 text-[var(--muted-foreground)]/40 cursor-not-allowed line-through font-normal'
               )}
             >
               {time}
@@ -318,7 +318,7 @@ function ConfirmStep({
         </div>
       </div>
 
-      <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl overflow-hidden mb-6">
+      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
         <div className="p-4 border-b border-[var(--border)] bg-[var(--primary)]/5">
           <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium">
             <CalendarCheck className="h-4 w-4" />

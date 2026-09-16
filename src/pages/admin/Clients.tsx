@@ -62,7 +62,7 @@ export default function Clients() {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Buscar por nome ou telefone..."
-          className="w-full pl-10 pr-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
+          className="w-full pl-10 pr-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
         />
       </div>
 
@@ -78,7 +78,7 @@ export default function Clients() {
             <Link
               key={client.id}
               to={`/admin/clients/${client.id}`}
-              className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] rounded-xl hover:border-[var(--primary)]/40 transition-all group"
+              className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/40 transition-all group"
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 rounded-full bg-[var(--secondary)] flex items-center justify-center text-sm font-bold text-[var(--primary)] shrink-0">

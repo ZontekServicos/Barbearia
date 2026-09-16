@@ -36,7 +36,7 @@ export default function Profile() {
           { label: 'Cancelamentos', value: stats.cancelled, icon: AlertTriangle, color: 'text-orange-400' },
           { label: 'Faltas', value: stats.missed, icon: AlertTriangle, color: 'text-red-400' },
         ].map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="border border-[var(--border)] bg-[var(--card)] rounded-xl p-4">
+          <div key={label} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4">
             <div className={`text-2xl font-bold ${color} mb-1`}>{value}</div>
             <div className="flex items-center gap-1.5">
               <Icon className={`h-3.5 w-3.5 ${color}`} />
@@ -56,7 +56,7 @@ export default function Profile() {
           <Link
             key={item.to}
             to={item.to}
-            className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] rounded-xl hover:border-[var(--primary)]/40 transition-all"
+            className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/40 transition-all"
           >
             <span className="text-sm font-medium">{item.label}</span>
             <span className="text-[var(--muted-foreground)]">→</span>

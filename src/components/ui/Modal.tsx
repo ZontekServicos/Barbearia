@@ -31,7 +31,7 @@ export function Modal({ titleId, onClose, children }: {
   }, [])
   return (
     <dialog onKeyDown={containDialogFocus} ref={ref} aria-labelledby={titleId} onCancel={event => { event.preventDefault(); onClose() }}
-      className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] p-6 backdrop:bg-black/70">
+      className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] text-[var(--foreground)] p-6 backdrop:bg-black/70">
       {children}
     </dialog>
   )

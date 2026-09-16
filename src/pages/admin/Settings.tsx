@@ -56,7 +56,7 @@ export default function Settings() {
           <Building className="h-4.5 w-4.5 text-[var(--primary)]" />
           <h3 className="text-base font-semibold">Dados da Barbearia</h3>
         </div>
-        <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-5 space-y-4">
+        <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-4">
           <Input label="Nome" required defaultValue="ErickCorttes Barbearia" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="WhatsApp" defaultValue="(71) 99999-0000" />
@@ -72,7 +72,7 @@ export default function Settings() {
           <Clock className="h-4.5 w-4.5 text-[var(--primary)]" />
           <h3 className="text-base font-semibold">Horários de Funcionamento</h3>
         </div>
-        <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl overflow-hidden">
+        <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden">
           {hours.map((h, i) => (
             <div key={h.day} className={cn('flex flex-wrap items-center gap-3 px-5 py-3.5', i < hours.length - 1 && 'border-b border-[var(--border)]')}>
               <Switch label={`Abrir ${h.day}`} checked={h.open} onChange={() => toggleDay(i)} />
@@ -111,7 +111,7 @@ export default function Settings() {
           <Shield className="h-4.5 w-4.5 text-[var(--primary)]" />
           <h3 className="text-base font-semibold">Regras de Agendamento</h3>
         </div>
-        <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-5 space-y-4">
+        <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="Antecedência mínima (horas)" type="number" min="0" required defaultValue="1" />
             <Input label="Antecedência máxima (dias)" type="number" min="0" required defaultValue="30" />

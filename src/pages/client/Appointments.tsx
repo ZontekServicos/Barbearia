@@ -100,7 +100,7 @@ export default function Appointments() {
             {displayedHistory.map(apt => (
               <div
                 key={apt.id}
-                className="border border-[var(--border)] bg-[var(--card)] rounded-xl px-4 py-3 flex items-center justify-between"
+                className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl px-4 py-3 flex items-center justify-between"
               >
                 <div>
                   <p className="font-medium text-sm text-[var(--foreground)]">{apt.serviceName}</p>

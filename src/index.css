@@ -29,7 +29,7 @@
     --accent: #C9A962;
     --accent-foreground: #0D0D0D;
 
-    --border: #2B2A22;
+    --border: #3A331F; /* Bronze-tinted, visibly warmer than flat gray */
     --ring: #C9A962;
 
     --radius: 0.5rem;
@@ -75,6 +75,8 @@
 
   body {
     background-color: var(--background);
+    background-image: radial-gradient(circle at 1px 1px, rgba(201, 169, 98, 0.05) 1px, transparent 0);
+    background-size: 24px 24px;
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;

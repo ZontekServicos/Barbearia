@@ -37,7 +37,7 @@ export default function Dashboard() {
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {kpis.map(({ label, value, icon: Icon, color, bg }) => (
-          <div key={label} className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-5">
+          <div key={label} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5">
             <div className={`w-10 h-10 rounded-xl ${bg} flex items-center justify-center mb-4`}>
               <Icon className={`h-5 w-5 ${color}`} />
             </div>
@@ -86,7 +86,7 @@ export default function Dashboard() {
               <Link
                 key={apt.id}
                 to={`/admin/agenda/${apt.id}`}
-                className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] rounded-xl hover:border-[var(--primary)]/50 transition-all group"
+                className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/50 transition-all group"
               >
                 <div className="flex items-center gap-4">
                   <span className="font-mono text-sm font-bold text-[var(--primary)] w-12 shrink-0">{apt.time}</span>
@@ -111,7 +111,7 @@ export default function Dashboard() {
           <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Concluídos hoje</h3>
           <div className="space-y-2">
             {completed.map(apt => (
-              <div key={apt.id} className="flex items-center justify-between px-4 py-3 border border-[var(--border)] bg-[var(--card)]/60 rounded-xl">
+              <div key={apt.id} className="flex items-center justify-between px-4 py-3 border border-[var(--border)] bg-[var(--card)]/60 shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl">
                 <div className="flex items-center gap-4">
                   <span className="font-mono text-sm text-[var(--muted-foreground)] w-12 shrink-0">{apt.time}</span>
                   <div>

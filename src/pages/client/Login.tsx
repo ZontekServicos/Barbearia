@@ -82,13 +82,21 @@ export default function Login() {
   }
 
   return (
-    <main className="min-h-dvh bg-[var(--background)] flex flex-col items-center justify-center px-6 py-12">
-      <div className="w-full max-w-sm">
-        <DemoNotice />
+    <main className="min-h-dvh bg-[var(--background)] flex flex-col items-center justify-center px-6 py-12 relative overflow-hidden">
+      {/* Ambient glow */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full bg-[var(--primary)]/5 blur-3xl pointer-events-none" />
+      <Logo aria-hidden className="hidden sm:block absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[26rem] w-[26rem] text-[var(--primary)]/[0.035] pointer-events-none" />
+
+      <div className="w-full max-w-sm relative z-10">
+        <div className="flex justify-center">
+          <DemoNotice />
+        </div>
         {/* Brand */}
         <div className="flex flex-col items-center gap-2 mb-8">
-          <Logo className="h-9 w-9 text-[var(--primary)]" />
-          <span className="font-display font-bold text-lg tracking-tight">ErickCorttes</span>
+          <div className="w-14 h-14 rounded-full border border-[var(--primary)]/40 bg-[var(--primary)]/10 flex items-center justify-center mb-1">
+            <Logo className="h-8 w-8 text-[var(--primary)]" />
+          </div>
+          <span className="font-display font-bold text-xl tracking-tight">ErickCorttes</span>
           <p className="text-xs tracking-widest uppercase text-[var(--muted-foreground)]">Estilo · Disciplina · Confiança</p>
         </div>
 
@@ -96,11 +104,14 @@ export default function Login() {
         <button
           disabled={loading}
           onClick={() => step === 'phone' ? navigate('/') : setStep('phone')}
-          className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-8"
+          className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-6"
         >
           <ArrowLeft className="h-4 w-4" />
           Voltar
         </button>
+
+        {/* Card panel */}
+        <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_12px_36px_rgba(0,0,0,0.45)] rounded-3xl p-6">
 
         {/* Step icon */}
         <div className="mb-8 text-center">
@@ -176,7 +187,7 @@ export default function Login() {
           <form onSubmit={handleOtpSubmit} className="space-y-6">
             <div>
               <p className="text-sm text-center text-[var(--muted-foreground)] mb-4">Digite quaisquer 6 dígitos para explorar. Para testar o cadastro, use um telefone com 8888.</p>
-              <div className="flex gap-2 justify-center">
+              <div className="grid grid-cols-6 gap-1.5">
                 {otp.map((digit, i) => (
                   <input
                     key={i}
@@ -196,7 +207,7 @@ export default function Login() {
                     value={digit}
                     onChange={e => handleOtpChange(i, e.target.value)}
                     onKeyDown={e => handleOtpKeyDown(i, e)}
-                    className="w-11 h-14 text-center text-xl font-bold bg-[var(--secondary)] border border-[var(--border)] rounded-xl text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
+                    className="w-full min-w-0 h-14 text-center text-xl font-bold bg-[var(--secondary)] border border-[var(--border)] rounded-xl text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
                   />
                 ))}
               </div>
@@ -253,6 +264,7 @@ export default function Login() {
             </Button>
           </form>
         )}
+        </div>
       </div>
     </main>
   )

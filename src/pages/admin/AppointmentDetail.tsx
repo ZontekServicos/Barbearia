@@ -68,7 +68,7 @@ function AppointmentDetailContent() {
       </div>
 
       {/* Details card */}
-      <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl overflow-hidden mb-6">
+      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
         <div className="p-5 border-b border-[var(--border)] bg-[var(--primary)]/5">
           <p className="text-xs text-[var(--primary)] font-semibold tracking-widest uppercase">Detalhes</p>
         </div>
@@ -101,7 +101,7 @@ function AppointmentDetailContent() {
       </div>
 
       {/* Actions */}
-      <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-5 space-y-2">
+      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-2">
         <p className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Ações</p>
 
         {status === 'confirmed' && (

@@ -48,7 +48,7 @@ export default function Agenda() {
           <h2 className="text-2xl font-bold tracking-tight">Agenda</h2>
           <p className="text-sm text-[var(--muted-foreground)] mt-0.5">Gerencie seus atendimentos.</p>
         </div>
-        <div className="flex items-center gap-1 border border-[var(--border)] bg-[var(--card)] rounded-lg p-1">
+        <div className="flex items-center gap-1 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-lg p-1">
           <button
             aria-label="Visualizar por dia"
             onClick={() => setView('day')}
@@ -72,7 +72,7 @@ export default function Agenda() {
       {view === 'day' && (
         <>
           {/* Week strip */}
-          <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-4 mb-6">
+          <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
             <div className="flex items-center justify-between mb-3">
               <button aria-label="Semana anterior" onClick={() => setSelectedDate(format(addWeeks(parseISO(selectedDate), -1), 'yyyy-MM-dd'))} className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors">
                 <ChevronLeft className="h-4 w-4" />

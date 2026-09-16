@@ -40,7 +40,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-[var(--background)] flex">
       {/* Sidebar desktop */}
-      <aside className="hidden md:flex w-60 flex-col border-r border-[var(--border)] bg-[var(--card)] flex-shrink-0">
+      <aside className="hidden md:flex w-60 flex-col border-r border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] flex-shrink-0">
         <div className="p-6 border-b border-[var(--border)]">
           <div className="flex items-center gap-2">
             <Logo className="h-7 w-7 text-[var(--primary)]" />
@@ -91,7 +91,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         const rect = event.currentTarget.getBoundingClientRect()
         if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) setMobileOpen(false)
       }} onKeyDown={containDialogFocus} ref={menuRef} aria-label="Navegação administrativa" onCancel={event => { event.preventDefault(); setMobileOpen(false) }}
-        className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-dvh w-72 max-w-[calc(100%-2rem)] border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] p-0 backdrop:bg-black/70">
+        className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-dvh w-72 max-w-[calc(100%-2rem)] border-r border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] text-[var(--foreground)] p-0 backdrop:bg-black/70">
 
         <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
           <div className="flex items-center gap-2">

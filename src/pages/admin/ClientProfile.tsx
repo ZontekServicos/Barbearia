@@ -118,7 +118,7 @@ function ClientProfileContent() {
           { label: 'Cancelamentos', value: client.cancelledAppointments, icon: XCircle, color: 'text-orange-400' },
           { label: 'Faltas', value: client.missedAppointments, icon: AlertTriangle, color: 'text-red-400' },
         ].map(({ label, value, color }) => (
-          <div key={label} className="border border-[var(--border)] bg-[var(--card)] rounded-xl p-4 text-center">
+          <div key={label} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4 text-center">
             <div className={`text-2xl font-bold ${color} mb-1`}>{value}</div>
             <p className="text-xs text-[var(--muted-foreground)]">{label}</p>
           </div>
@@ -126,7 +126,7 @@ function ClientProfileContent() {
       </div>
 
       {/* Notes */}
-      <div className="border border-[var(--border)] bg-[var(--card)] rounded-2xl p-5 mb-6">
+      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 mb-6">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <MessageSquare className="h-4 w-4 text-[var(--primary)]" />
