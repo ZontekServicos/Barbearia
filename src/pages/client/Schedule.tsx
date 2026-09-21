@@ -343,7 +343,11 @@ function ConfirmStep({
         </div>
       </div>
 
-      <Button className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
+      <p id="booking-simulation-notice" className="text-sm text-[var(--muted-foreground)] mb-4">
+        Este agendamento é uma simulação. Nenhuma reserva será criada ou salva.
+      </p>
+
+      <Button aria-describedby="booking-simulation-notice" className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
         {loading ? 'Simulando...' : 'Confirmar simulação'}
       </Button>
     </div>

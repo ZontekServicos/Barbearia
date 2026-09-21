@@ -59,13 +59,9 @@ export default function Landing() {
             className="w-44 h-44 sm:w-56 sm:h-56 rounded-full object-cover object-[center_45%] mx-auto mb-6 mix-blend-screen"
           />
 
-          <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold tracking-tight leading-[1.1] mb-5">
-            Mais que um corte,<br />
-            <span className="text-[var(--primary)]">um estilo de vida.</span>
-          </h1>
-          <p className="text-[var(--foreground)] text-base md:text-lg max-w-md mx-auto mb-7">
+          <h1 className="font-sans font-normal text-[var(--foreground)] text-base md:text-lg max-w-md mx-auto mb-7">
             Agende seu horário pelo celular de forma rápida e sem complicação.
-          </p>
+          </h1>
           <Button asChild size="lg" className="w-full sm:w-auto text-base h-12 px-8">
             <Link to="/login">Agendar horário <ArrowRight className="ml-2 h-4 w-4" /></Link>
           </Button>
@@ -81,8 +77,7 @@ export default function Landing() {
       <section id="servicos" className="py-20 px-6 scroll-mt-24">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
-            <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Serviços</p>
-            <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight">O que oferecemos</h2>
+            <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase">Serviços</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -140,8 +135,7 @@ export default function Landing() {
       <section id="como-funciona" className="py-12 sm:py-16 px-6">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-12">
-            <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Como funciona</p>
-            <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight">Agendar é simples</h2>
+            <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase">Como funciona</h2>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
@@ -175,8 +169,7 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto grid md:grid-cols-2 gap-12">
           {/* Hours */}
           <div>
-            <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Horários</p>
-            <h2 className="font-display text-2xl font-bold tracking-tight mb-6">Funcionamento</h2>
+            <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-6">Horários</h2>
             <div className="space-y-2">
               {BUSINESS_HOURS.map((h) => (
                 <div key={h.day} className="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
@@ -195,8 +188,7 @@ export default function Landing() {
 
           {/* Info */}
           <div>
-            <p className="text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-3">Localização</p>
-            <h2 className="font-display text-2xl font-bold tracking-tight mb-6">Onde estamos</h2>
+            <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-6">Localização</h2>
 
             <div className="space-y-4">
               <div className="flex items-start gap-3">
@@ -252,12 +244,6 @@ export default function Landing() {
               <div className="w-64 h-64 rounded-full bg-[var(--primary)]/5 blur-3xl" />
             </div>
             <div className="relative z-10">
-              <h2 className="font-display text-3xl md:text-4xl font-bold tracking-tight mb-4">
-                Pronto para o visual perfeito?
-              </h2>
-              <p className="text-[var(--muted-foreground)] mb-8 max-w-md mx-auto">
-                Escolha seu serviço e explore o agendamento.
-              </p>
               <Button asChild size="lg" className="text-base h-12 px-10">
                 <Link to="/login">
                   Agendar horário <ArrowRight className="ml-2 h-4 w-4" />
