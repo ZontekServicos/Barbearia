@@ -49,7 +49,7 @@ export default function Appointments() {
         <h3 className="text-xs font-semibold tracking-widest text-[var(--primary)] uppercase mb-3">Próximos</h3>
 
         {filteredUpcoming.length === 0 ? (
-          <div className="border border-dashed border-[var(--border)] rounded-2xl p-8 text-center">
+          <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-2xl p-8 text-center">
             <Logo className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
             <p className="text-[var(--muted-foreground)] text-sm mb-4">Você ainda não possui agendamentos futuros.</p>
             <Button asChild size="sm">
@@ -61,7 +61,7 @@ export default function Appointments() {
             {filteredUpcoming.map(apt => (
               <div
                 key={apt.id}
-                className="border border-[var(--primary)]/30 bg-[var(--card)] rounded-2xl p-4"
+                className="border border-[var(--primary)]/30 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4"
               >
                 <div className="flex items-start justify-between mb-3">
                   <div>

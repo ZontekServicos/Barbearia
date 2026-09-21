@@ -8,12 +8,17 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     /* ERICKCORTTES BARBEARIA — official brand palette */
     --background: #0D0D0D; /* Preto profundo */
     --foreground: #F5EBD2; /* Creme */
 
     --card: #1A1A18; /* Carvão */
     --card-foreground: #F5EBD2;
+
+    /* Opaque counterpart to the landing's translucent bronze glass, for screens
+       with no photo behind them (booking flow). */
+    --surface-bronze: #1F1A11;
 
     --primary: #C9A962; /* Dourado principal */
     --primary-light: #E1C77B; /* Dourado claro */
@@ -31,6 +36,7 @@
 
     --border: #3A331F; /* Bronze-tinted, visibly warmer than flat gray */
     --ring: #C9A962;
+    --input-border: color-mix(in srgb, var(--primary) 60%, var(--background));
 
     --radius: 0.5rem;
 

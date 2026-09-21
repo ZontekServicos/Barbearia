@@ -14,9 +14,9 @@ const stats = {
 export default function Profile() {
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--primary)]/20 border border-[var(--primary)]/30 flex items-center justify-center">
+      {/* Header — personal data grouped into a single bronze block */}
+      <div className="flex items-center gap-4 border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-8">
+        <div className="w-16 h-16 rounded-2xl bg-[var(--primary)]/20 border border-[var(--primary)]/30 flex items-center justify-center shrink-0">
           <span className="text-2xl font-bold text-[var(--primary)]">J</span>
         </div>
         <div>
@@ -56,7 +56,7 @@ export default function Profile() {
           <Link
             key={item.to}
             to={item.to}
-            className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/40 transition-all"
+            className="flex items-center justify-between p-4 border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/45 transition-all"
           >
             <span className="text-sm font-medium">{item.label}</span>
             <span className="text-[var(--muted-foreground)]">→</span>

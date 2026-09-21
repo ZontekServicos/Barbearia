@@ -84,7 +84,7 @@ export default function Landing() {
             {SERVICES.filter(s => s.active).map((service) => (
               <div
                 key={service.id}
-                className="group relative border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-6 transition-all hover:-translate-y-1 hover:border-[var(--primary)]/50 hover:shadow-[0_12px_32px_rgba(201,169,98,0.12)]"
+                className="group relative border border-[var(--primary)]/25 bg-[rgba(38,31,18,0.5)] backdrop-blur-md shadow-[0_4px_18px_rgba(0,0,0,0.45)] rounded-2xl p-6 transition-all hover:-translate-y-1 hover:bg-[rgba(52,42,24,0.6)] hover:border-[var(--primary)]/55 hover:shadow-[0_12px_32px_rgba(201,169,98,0.15)]"
               >
                 <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[var(--primary)]/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
@@ -99,7 +99,7 @@ export default function Landing() {
                 <h3 className="font-semibold text-lg mb-1.5">{service.name}</h3>
                 <p className="text-sm text-[var(--muted-foreground)] mb-4 min-h-10">{service.description}</p>
 
-                <div className="flex items-center justify-between pt-4 border-t border-[var(--border)]">
+                <div className="flex items-center justify-between pt-4 border-t border-[var(--primary)]/20">
                   <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                     <Clock className="h-3.5 w-3.5" />
                     <span>{service.duration} minutos</span>

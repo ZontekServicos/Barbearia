@@ -23,10 +23,10 @@ export default function ClientHome() {
         <h2 className="text-2xl font-bold tracking-tight">João Silva 👋</h2>
       </div>
 
-      {/* Quick action */}
+      {/* Quick action — highest-priority destination, so it gets the bronze surface */}
       <Link
         to="/client/schedule"
-        className="block border border-[var(--primary)]/40 bg-gradient-to-r from-[var(--primary)]/10 to-transparent rounded-2xl p-5 mb-6 hover:border-[var(--primary)]/60 transition-all group"
+        className="block border border-[var(--primary)]/35 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 mb-6 hover:border-[var(--primary)]/60 transition-all group"
       >
         <div className="flex items-center justify-between">
           <div>
@@ -49,14 +49,14 @@ export default function ClientHome() {
         </div>
 
         {upcoming.length === 0 ? (
-          <div className="border border-dashed border-[var(--border)] rounded-xl p-6 text-center">
+          <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-xl p-6 text-center">
             <Logo className="h-8 w-8 text-[var(--muted-foreground)]/40 mx-auto mb-2" />
             <p className="text-sm text-[var(--muted-foreground)]">Nenhum agendamento futuro.</p>
           </div>
         ) : (
           <div className="space-y-3">
             {upcoming.map(apt => (
-              <div key={apt.id} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4 flex items-center justify-between">
+              <div key={apt.id} className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4 flex items-center justify-between">
                 <div>
                   <p className="font-semibold text-sm">{apt.serviceName}</p>
                   <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] mt-0.5">

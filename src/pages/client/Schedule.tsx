@@ -52,7 +52,7 @@ function StepProgress({ current }: { current: Step }) {
             </div>
             {i < steps.length - 1 && (
               <div className={cn(
-                'flex-1 h-px mx-2 mt-[-14px]',
+                'flex-1 h-px mx-2 sm:mt-[-14px]',
                 i < currentIndex ? 'bg-[var(--primary)]/60' : 'bg-[var(--border)]'
               )} />
             )}
@@ -83,14 +83,16 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
             className={cn(
               'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
               selected === service.id
-                ? 'border-[var(--primary)] bg-[var(--primary)]/10'
-                : 'border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/40'
+                ? 'border-[var(--primary)] bg-[var(--primary)]/12'
+                : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/45'
             )}
           >
             <div className="flex items-center gap-3">
               <div className={cn(
-                'w-10 h-10 rounded-lg flex items-center justify-center transition-colors',
-                selected === service.id ? 'bg-[var(--primary)]/20' : 'bg-[var(--secondary)]'
+                'w-10 h-10 rounded-full border flex items-center justify-center transition-colors',
+                selected === service.id
+                  ? 'border-[var(--primary)]/50 bg-[var(--primary)]/25'
+                  : 'border-[var(--primary)]/30 bg-[var(--primary)]/10'
               )}>
                 <Scissors className={cn('h-5 w-5', selected === service.id ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]')} />
               </div>
@@ -148,7 +150,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="min-h-11 min-w-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -157,13 +159,13 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
         </div>
       </div>
 
-      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
+      <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
         {/* Month header */}
         <div className="flex items-center justify-between mb-4">
           <button
             aria-label="Mês anterior"
             onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
-            className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors"
+            className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -173,7 +175,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
           <button
             aria-label="Próximo mês"
             onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
-            className="p-1.5 rounded-lg hover:bg-[var(--secondary)] transition-colors"
+            className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -207,7 +209,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
                   'aspect-square flex items-center justify-center text-sm rounded-lg transition-all',
                   sel && 'bg-[var(--primary)] text-black font-bold',
                   !sel && todayDay && 'border border-[var(--primary)]/50 text-[var(--primary)]',
-                  !sel && !disabled && !todayDay && 'hover:bg-[var(--secondary)] text-[var(--foreground)]',
+                  !sel && !disabled && !todayDay && 'hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
                   disabled && 'text-[var(--muted-foreground)]/40 cursor-not-allowed'
                 )}
               >
@@ -245,7 +247,7 @@ function TimeStep({
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="min-h-11 min-w-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -270,8 +272,9 @@ function TimeStep({
               className={cn(
                 'py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
                 isSelected && 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]',
-                !isSelected && !isOccupied && 'border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/5 text-[var(--foreground)]',
-                isOccupied && 'border-[var(--border)]/60 bg-[var(--secondary)]/40 text-[var(--muted-foreground)]/40 cursor-not-allowed line-through font-normal'
+                !isSelected && !isOccupied && 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
+                // Unavailable stays neutral and flat, so it reads as a different material from the bronze slots.
+                isOccupied && 'border-[var(--border)]/40 bg-[var(--secondary)]/40 text-[var(--muted-foreground)]/45 cursor-not-allowed line-through font-normal'
               )}
             >
               {time}
@@ -309,7 +312,7 @@ function ConfirmStep({
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <button disabled={loading} aria-label="Voltar à etapa anterior" onClick={onBack} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <button disabled={loading} aria-label="Voltar à etapa anterior" onClick={onBack} className="min-h-11 min-w-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
@@ -318,8 +321,8 @@ function ConfirmStep({
         </div>
       </div>
 
-      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
-        <div className="p-4 border-b border-[var(--border)] bg-[var(--primary)]/5">
+      <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
+        <div className="p-4 border-b border-[var(--primary)]/20 bg-[var(--primary)]/8">
           <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium">
             <CalendarCheck className="h-4 w-4" />
             Resumo do agendamento
