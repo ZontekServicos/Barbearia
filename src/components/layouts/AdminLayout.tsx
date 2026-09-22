@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, Calendar, Users, Scissors,
+  LayoutDashboard, Calendar, Users, UserCheck, Scissors,
   Settings, Menu, X, ChevronRight
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,7 @@ import { containDialogFocus } from '@/components/ui/Modal'
 
 const navItems = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
+  { to: '/admin/users', label: 'Usuários', icon: UserCheck },
   { to: '/admin/agenda', label: 'Agenda', icon: Calendar },
   { to: '/admin/clients', label: 'Clientes', icon: Users },
   { to: '/admin/services', label: 'Serviços', icon: Scissors },

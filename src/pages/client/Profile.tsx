@@ -1,29 +1,54 @@
-import { Link } from 'react-router-dom'
-import { Phone, Scissors, Star, AlertTriangle, LogOut } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { APPOINTMENTS } from '@/data/mock'
+import { useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
+import { Phone, Scissors, Star, AlertTriangle, LogOut } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { useAuth } from "@/context/AuthContext"
+import { APPOINTMENTS } from "@/data/mock"
 
-const clientAppointments = APPOINTMENTS.filter(a => a.clientId === 'c1')
+const clientAppointments = APPOINTMENTS.filter((a) => a.clientId === "c1")
 const stats = {
   total: clientAppointments.length,
-  completed: clientAppointments.filter(a => a.status === 'completed').length,
-  cancelled: clientAppointments.filter(a => a.status === 'cancelled').length,
-  missed: clientAppointments.filter(a => a.status === 'missed').length,
+  completed: clientAppointments.filter((a) => a.status === "completed").length,
+  cancelled: clientAppointments.filter((a) => a.status === "cancelled").length,
+  missed: clientAppointments.filter((a) => a.status === "missed").length,
 }
 
 export default function Profile() {
+  const { user, signOut } = useAuth()
+  const navigate = useNavigate()
+  const [signingOut, setSigningOut] = useState(false)
+
+  const displayName = user?.fullName ?? "Cliente"
+  const initial = displayName.trim().charAt(0).toUpperCase() || "C"
+
+  async function handleSignOut() {
+    setSigningOut(true)
+    try {
+      await signOut()
+    } catch {
+      // O estado local já foi encerrado; a indisponibilidade remota não prende esta tela.
+    } finally {
+      navigate("/", { replace: true })
+      setSigningOut(false)
+    }
+  }
+
   return (
     <div>
       {/* Header — personal data grouped into a single bronze block */}
       <div className="flex items-center gap-4 border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-8">
         <div className="w-16 h-16 rounded-2xl bg-[var(--primary)]/20 border border-[var(--primary)]/30 flex items-center justify-center shrink-0">
-          <span className="text-2xl font-bold text-[var(--primary)]">J</span>
+          <span className="text-2xl font-bold text-[var(--primary)]">
+            {initial}
+          </span>
         </div>
-        <div>
-          <h2 className="text-xl font-bold tracking-tight">João Silva</h2>
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold tracking-tight truncate">
+            {displayName}
+          </h2>
           <div className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] mt-0.5">
-            <Phone className="h-3.5 w-3.5" />
-            <span>(71) 99999-1111</span>
+            <Phone className="h-3.5 w-3.5 shrink-0" />
+            <span className="tabular-nums">{user?.phoneFormatted ?? "—"}</span>
           </div>
         </div>
       </div>
@@ -31,16 +56,41 @@ export default function Profile() {
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 mb-8">
         {[
-          { label: 'Agendamentos', value: stats.total, icon: Scissors, color: 'text-[var(--primary)]' },
-          { label: 'Concluídos', value: stats.completed, icon: Star, color: 'text-green-400' },
-          { label: 'Cancelamentos', value: stats.cancelled, icon: AlertTriangle, color: 'text-orange-400' },
-          { label: 'Faltas', value: stats.missed, icon: AlertTriangle, color: 'text-red-400' },
+          {
+            label: "Agendamentos",
+            value: stats.total,
+            icon: Scissors,
+            color: "text-[var(--primary)]",
+          },
+          {
+            label: "Concluídos",
+            value: stats.completed,
+            icon: Star,
+            color: "text-green-400",
+          },
+          {
+            label: "Cancelamentos",
+            value: stats.cancelled,
+            icon: AlertTriangle,
+            color: "text-orange-400",
+          },
+          {
+            label: "Faltas",
+            value: stats.missed,
+            icon: AlertTriangle,
+            color: "text-red-400",
+          },
         ].map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4">
+          <div
+            key={label}
+            className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl p-4"
+          >
             <div className={`text-2xl font-bold ${color} mb-1`}>{value}</div>
             <div className="flex items-center gap-1.5">
               <Icon className={`h-3.5 w-3.5 ${color}`} />
-              <span className="text-xs text-[var(--muted-foreground)]">{label}</span>
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {label}
+              </span>
             </div>
           </div>
         ))}
@@ -48,11 +98,13 @@ export default function Profile() {
 
       {/* Actions */}
       <div className="space-y-2 mb-8">
-        <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Conta</h3>
+        <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">
+          Conta
+        </h3>
         {[
-          { label: 'Meus agendamentos', to: '/client/appointments' },
-          { label: 'Fazer agendamento', to: '/client/schedule' },
-        ].map(item => (
+          { label: "Meus agendamentos", to: "/client/appointments" },
+          { label: "Fazer agendamento", to: "/client/schedule" },
+        ].map((item) => (
           <Link
             key={item.to}
             to={item.to}
@@ -65,11 +117,14 @@ export default function Profile() {
       </div>
 
       {/* Logout */}
-      <Button variant="outline" className="w-full h-11 text-[var(--muted-foreground)]" asChild>
-        <Link to="/">
-          <LogOut className="h-4 w-4 mr-2" />
-          Sair da conta
-        </Link>
+      <Button
+        variant="outline"
+        className="w-full h-11 text-[var(--muted-foreground)]"
+        onClick={handleSignOut}
+        disabled={signingOut}
+      >
+        <LogOut className="h-4 w-4 mr-2" />
+        {signingOut ? "Saindo..." : "Sair da conta"}
       </Button>
     </div>
   )

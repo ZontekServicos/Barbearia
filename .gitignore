@@ -3,7 +3,13 @@ dist/
 build/
 .cache/
 .env*
+# Os .example precisam ser versionados — são a documentação das variáveis.
+!.env.example
+!server/.env.example
 .vite/
+
+# Client do Prisma é gerado a partir do schema (pnpm db:generate).
+server/src/generated/
 vite.config.*.timestamp-*
 *.tsbuildinfo
 *-debug.log*

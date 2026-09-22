@@ -1,0 +1,96 @@
+// ErickCorttes Barbearia — schema base de usuários, autenticação e auditoria.
+// A próxima fase (Service, Barber, Availability, Appointment) se apoia neste núcleo.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// A URL de conexão vive em prisma.config.ts (Migrate) e no driver adapter
+// (runtime) — o Prisma 7 não aceita mais `url` aqui.
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  BLOCKED
+}
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  fullName        String?    @map("full_name") @db.VarChar(120)
+  /// Sempre em E.164 (ex.: +5571999999999). Único: um telefone = um usuário.
+  phone           String     @unique @db.VarChar(20)
+  role            UserRole   @default(CUSTOMER)
+  status          UserStatus @default(PENDING)
+  phoneVerifiedAt DateTime?  @map("phone_verified_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  refreshTokens   RefreshToken[]
+  actionsPerfomed AdminAuditLog[] @relation("AdminActor")
+  actionsReceived AdminAuditLog[] @relation("AdminTarget")
+
+  @@index([status])
+  @@index([role])
+  @@map("users")
+}
+
+/// Desafio de OTP. O código em texto puro nunca é persistido — apenas o hash scrypt.
+model OtpChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  phone      String    @db.VarChar(20)
+  codeHash   String    @map("code_hash") @db.VarChar(255)
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_challenges")
+}
+
+/// Refresh token rotativo. Guardamos apenas o hash SHA-256 do token emitido.
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  /// Preenchido quando o token é rotacionado, permitindo detectar reuso.
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacement  RefreshToken?  @relation("RefreshRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  predecessors RefreshToken[] @relation("RefreshRotation")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/// Trilha de auditoria das ações administrativas (aprovar, bloquear, reativar, promover).
+model AdminAuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorId      String   @map("actor_id") @db.Uuid
+  targetUserId String?  @map("target_user_id") @db.Uuid
+  action       String   @db.VarChar(60)
+  metadata     Json?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  actor      User  @relation("AdminActor", fields: [actorId], references: [id], onDelete: Restrict)
+  targetUser User? @relation("AdminTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@map("admin_audit_logs")
+}

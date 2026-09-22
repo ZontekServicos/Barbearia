@@ -1,40 +1,34 @@
-import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Phone, MessageSquare, User } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { useState, useRef, useEffect } from "react"
+import { useNavigate } from "react-router-dom"
+import { ArrowLeft, Phone, MessageSquare, User } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { useAuth } from "@/context/AuthContext"
+import { requestOtp } from "@/services/auth"
+import type { AuthUser } from "@/services/auth"
+import { ApiError } from "@/services/api"
 
-type Step = 'phone' | 'otp' | 'register'
+type Step = "phone" | "otp" | "register"
 
 export default function Login() {
   const navigate = useNavigate()
-  const [step, setStep] = useState<Step>('phone')
-  const [phone, setPhone] = useState('')
-  const [otp, setOtp] = useState(['', '', '', '', '', ''])
-  const [name, setName] = useState('')
+  const { signInWithOtp, updateName } = useAuth()
+  const [step, setStep] = useState<Step>("phone")
+  const [phone, setPhone] = useState("")
+  const [otp, setOtp] = useState(["", "", "", "", "", ""])
+  const [name, setName] = useState("")
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
-    if (step === 'otp') {
+    if (step === "otp") {
       otpRefs.current[0]?.focus()
     }
   }, [step])
 
-  function formatPhone(value: string) {
-    const digits = value.replace(/\D/g, '').slice(0, 11)
-    if (!digits) return ''
-    if (digits.length <= 2) return `(${digits}`
-    if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`
-    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
-  }
-
-  function handlePhoneChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setPhone(formatPhone(e.target.value))
-  }
-
   function handleOtpChange(index: number, value: string) {
-    const digit = value.replace(/\D/g, '').slice(-1)
+    const digit = value.replace(/\D/g, "").slice(-1)
     const newOtp = [...otp]
     newOtp[index] = digit
     setOtp(newOtp)
@@ -44,107 +38,195 @@ export default function Login() {
   }
 
   function handleOtpKeyDown(index: number, e: React.KeyboardEvent) {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
+    if (e.key === "Backspace" && !otp[index] && index > 0) {
       otpRefs.current[index - 1]?.focus()
     }
+  }
+
+  function describeError(err: unknown): string {
+    if (err instanceof ApiError) return err.message
+    return "Algo deu errado. Tente novamente."
+  }
+
+  /** Para onde mandar o usuário depois de autenticar, conforme papel e status. */
+  function redirectForUser(user: AuthUser) {
+    if (user.status === "BLOCKED")
+      return navigate("/conta/bloqueada", { replace: true })
+    if (user.status === "PENDING")
+      return navigate("/conta/pendente", { replace: true })
+    if (user.role === "ADMIN") return navigate("/admin", { replace: true })
+    return navigate("/client/schedule", { replace: true })
   }
 
   async function handlePhoneSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
-    await new Promise(r => setTimeout(r, 800))
-    setLoading(false)
-    setStep('otp')
+    setError(null)
+    try {
+      await requestOtp(phone)
+      setOtp(["", "", "", "", "", ""])
+      setStep("otp")
+    } catch (err) {
+      setError(describeError(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleOtpSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
-    await new Promise(r => setTimeout(r, 800))
-    setLoading(false)
-    // Simulate new user on first access
-    const isNewUser = phone.replace(/\D/g, '').includes('8888')
-    if (isNewUser) {
-      setStep('register')
-    } else {
-      navigate('/client/schedule')
+    setError(null)
+    try {
+      const user = await signInWithOtp(phone, otp.join(""))
+      // Primeiro acesso sem nome: pedimos antes de seguir.
+      if (!user.fullName) {
+        setStep("register")
+        return
+      }
+      redirectForUser(user)
+    } catch (err) {
+      setError(describeError(err))
+      if (err instanceof ApiError && err.code === "ACCOUNT_BLOCKED")
+        navigate("/conta/bloqueada", { replace: true })
+      setOtp(["", "", "", "", "", ""])
+      otpRefs.current[0]?.focus()
+    } finally {
+      setLoading(false)
     }
   }
 
   async function handleRegisterSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
-    await new Promise(r => setTimeout(r, 600))
-    setLoading(false)
-    navigate('/client/schedule')
+    setError(null)
+    try {
+      redirectForUser(await updateName(name.trim()))
+    } catch (err) {
+      setError(describeError(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <main className="relative isolate min-h-dvh flex flex-col items-center justify-center px-5 py-10">
       {/* Same barbershop atmosphere as the client layout, so auth feels like the same app. */}
-      <div aria-hidden="true" className="fixed inset-0 -z-10 pointer-events-none">
-        <img src="/brand/interior.jpg" alt="" width="1536" height="1024" className="h-full w-full object-cover object-[68%_center] md:object-center" />
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 -z-10 pointer-events-none"
+      >
+        <img
+          src="/brand/interior.jpg"
+          alt=""
+          width="1536"
+          height="1024"
+          className="h-full w-full object-cover object-[68%_center] md:object-center"
+        />
         <div className="absolute inset-0 bg-black/80" />
       </div>
 
       <div className="w-full max-w-sm">
         {/* Compact branding */}
         <div className="flex items-center justify-center gap-2.5 mb-5">
-          <img src="/brand/app-icon.png" alt="" width="256" height="256" className="h-10 w-10 object-contain shrink-0" />
-          <span className="font-display font-bold text-lg tracking-tight">ErickCorttes</span>
+          <img
+            src="/brand/app-icon.png"
+            alt=""
+            width="256"
+            height="256"
+            className="h-10 w-10 object-contain shrink-0"
+          />
+          <span className="font-display font-bold text-lg tracking-tight">
+            ErickCorttes
+          </span>
         </div>
 
         {/* Card panel */}
         <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_12px_36px_rgba(0,0,0,0.45)] rounded-2xl p-5 sm:p-6">
-
           {/* Step header */}
           <div className="text-center mb-6">
             <div className="w-11 h-11 rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 flex items-center justify-center mx-auto mb-3">
-              {step === 'phone' && <Phone className="h-5 w-5 text-[var(--primary)]" />}
-              {step === 'otp' && <MessageSquare className="h-5 w-5 text-[var(--primary)]" />}
-              {step === 'register' && <User className="h-5 w-5 text-[var(--primary)]" />}
+              {step === "phone" && (
+                <Phone className="h-5 w-5 text-[var(--primary)]" />
+              )}
+              {step === "otp" && (
+                <MessageSquare className="h-5 w-5 text-[var(--primary)]" />
+              )}
+              {step === "register" && (
+                <User className="h-5 w-5 text-[var(--primary)]" />
+              )}
             </div>
 
-            {step === 'phone' && (
+            {step === "phone" && (
               <>
-                <h1 className="font-display text-2xl font-bold tracking-tight">Qual é o seu número?</h1>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">Informe seu WhatsApp para continuar.</p>
+                <h1 className="font-display text-2xl font-bold tracking-tight">
+                  Qual é o seu número?
+                </h1>
+                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
+                  Informe seu WhatsApp para continuar.
+                </p>
               </>
             )}
-            {step === 'otp' && (
+            {step === "otp" && (
               <>
-                <h1 className="font-display text-2xl font-bold tracking-tight">Digite o código</h1>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">Simulação para</p>
-                <p className="text-[var(--foreground)] font-semibold tabular-nums">{phone}</p>
+                <h1 className="font-display text-2xl font-bold tracking-tight">
+                  Digite o código
+                </h1>
+                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
+                  Enviamos um código para
+                </p>
+                <p className="text-[var(--foreground)] font-semibold tabular-nums">
+                  {phone}
+                </p>
               </>
             )}
-            {step === 'register' && (
+            {step === "register" && (
               <>
-                <h1 className="font-display text-2xl font-bold tracking-tight">Primeiro acesso</h1>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">Precisamos de mais algumas informações.</p>
+                <h1 className="font-display text-2xl font-bold tracking-tight">
+                  Primeiro acesso
+                </h1>
+                <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
+                  Precisamos de mais algumas informações.
+                </p>
               </>
             )}
           </div>
 
           {/* Step indicators */}
           <div className="flex gap-1.5 justify-center mb-6">
-            {(['phone', 'otp', 'register'] as Step[]).map(s => {
-              const index = (['phone', 'otp', 'register'] as Step[]).indexOf(s)
-              const currentIndex = (['phone', 'otp', 'register'] as Step[]).indexOf(step)
+            {(["phone", "otp", "register"] as Step[]).map((s) => {
+              const index = (["phone", "otp", "register"] as Step[]).indexOf(s)
+              const currentIndex = ([
+                "phone",
+                "otp",
+                "register",
+              ] as Step[]).indexOf(step)
               return (
                 <div
                   key={s}
                   className={`h-1 rounded-full transition-all ${
-                    s === step ? 'w-6 bg-[var(--primary)]' :
-                    index < currentIndex ? 'w-1.5 bg-[var(--primary)]/50' : 'w-1.5 bg-[var(--primary)]/15'
+                    s === step
+                      ? "w-6 bg-[var(--primary)]"
+                      : index < currentIndex
+                        ? "w-1.5 bg-[var(--primary)]/50"
+                        : "w-1.5 bg-[var(--primary)]/15"
                   }`}
                 />
               )
             })}
           </div>
 
+          {error && (
+            <p
+              role="alert"
+              className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+            >
+              {error}
+            </p>
+          )}
+
           {/* Phone step */}
-          {step === 'phone' && (
+          {step === "phone" && (
             <form onSubmit={handlePhoneSubmit} className="space-y-4">
               <Input
                 label="Telefone / WhatsApp"
@@ -152,7 +234,8 @@ export default function Login() {
                 icon={<Phone className="h-4 w-4" />}
                 placeholder="(71) 99999-9999"
                 value={phone}
-                onChange={handlePhoneChange}
+                onChange={(e) => setPhone(e.target.value)}
+                maxLength={24}
                 autoComplete="tel"
                 inputMode="tel"
                 required
@@ -160,41 +243,54 @@ export default function Login() {
               <Button
                 type="submit"
                 className="w-full h-12 text-base"
-                disabled={loading || phone.replace(/\D/g, '').length < 10}
+                disabled={loading || phone.replace(/\D/g, "").length < 10}
               >
-                {loading ? 'Enviando...' : 'Continuar'}
+                {loading ? "Enviando..." : "Continuar"}
               </Button>
               <p className="text-xs text-center text-[var(--muted-foreground)]">
-                Demonstração — nenhuma mensagem real será enviada. Para simular o cadastro, use um telefone com 8888.
+                Enviaremos um código de 6 dígitos para confirmar seu número.
               </p>
             </form>
           )}
 
           {/* OTP step */}
-          {step === 'otp' && (
+          {step === "otp" && (
             <form onSubmit={handleOtpSubmit} className="space-y-5">
               <div className="grid grid-cols-6 gap-1.5 sm:gap-2">
                 {otp.map((digit, i) => (
                   <input
                     key={i}
-                    ref={el => { otpRefs.current[i] = el }}
+                    ref={(el) => {
+                      otpRefs.current[i] = el
+                    }}
                     type="text"
                     inputMode="numeric"
                     aria-label={`Dígito ${i + 1} do código`}
                     autoComplete={i === 0 ? "one-time-code" : "off"}
-                    onPaste={event => {
+                    onPaste={(event) => {
                       event.preventDefault()
-                      const digits = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6).split('')
+                      const digits = event.clipboardData
+                        .getData("text")
+                        .replace(/\D/g, "")
+                        .slice(0, 6)
+                        .split("")
                       if (!digits.length) return
-                      setOtp(Array.from({ length: 6 }, (_, index) => digits[index] ?? ''))
+                      setOtp(
+                        Array.from(
+                          { length: 6 },
+                          (_, index) => digits[index] ?? "",
+                        ),
+                      )
                       otpRefs.current[Math.min(digits.length, 5)]?.focus()
                     }}
                     maxLength={1}
                     value={digit}
-                    onChange={e => handleOtpChange(i, e.target.value)}
-                    onKeyDown={e => handleOtpKeyDown(i, e)}
+                    onChange={(e) => handleOtpChange(i, e.target.value)}
+                    onKeyDown={(e) => handleOtpKeyDown(i, e)}
                     className={`w-full min-w-0 h-13 text-center text-lg font-bold tabular-nums bg-[var(--background)] border rounded-xl text-[var(--foreground)] transition-all focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/30 ${
-                      digit ? 'border-[var(--primary)]' : 'border-[var(--input-border)]'
+                      digit
+                        ? "border-[var(--primary)]"
+                        : "border-[var(--input-border)]"
                     }`}
                   />
                 ))}
@@ -203,19 +299,22 @@ export default function Login() {
               <Button
                 type="submit"
                 className="w-full h-12 text-base"
-                disabled={loading || otp.join('').length < 6}
+                disabled={loading || otp.join("").length < 6}
               >
-                {loading ? 'Verificando...' : 'Confirmar'}
+                {loading ? "Verificando..." : "Confirmar"}
               </Button>
 
               <div className="text-center space-y-1">
                 <p className="text-xs text-[var(--muted-foreground)]">
-                  Demonstração — use qualquer código de 6 dígitos.
+                  Não recebeu? Volte e peça um novo código.
                 </p>
                 <button
                   type="button"
                   className="text-xs text-[var(--primary)] hover:text-[var(--primary-light)] transition-colors min-h-11"
-                  onClick={() => { setOtp(['', '', '', '', '', '']); otpRefs.current[0]?.focus() }}
+                  onClick={() => {
+                    setOtp(["", "", "", "", "", ""])
+                    otpRefs.current[0]?.focus()
+                  }}
                 >
                   Limpar código
                 </button>
@@ -224,7 +323,7 @@ export default function Login() {
           )}
 
           {/* Register step */}
-          {step === 'register' && (
+          {step === "register" && (
             <form onSubmit={handleRegisterSubmit} className="space-y-4">
               <Input
                 label="Seu nome"
@@ -232,25 +331,16 @@ export default function Login() {
                 icon={<User className="h-4 w-4" />}
                 placeholder="João Silva"
                 value={name}
-                onChange={e => setName(e.target.value)}
+                onChange={(e) => setName(e.target.value)}
                 required
               />
-              <Input
-                label="WhatsApp"
-                type="tel"
-                value={phone}
-                disabled
-              />
-              <Input
-                label="Data de nascimento (opcional)"
-                type="date"
-              />
+              <Input label="WhatsApp" type="tel" value={phone} disabled />
               <Button
                 type="submit"
                 className="w-full h-12 text-base mt-2"
-                disabled={loading || !name.trim()}
+                disabled={loading || name.trim().length < 2}
               >
-                {loading ? 'Criando conta...' : 'Simular cadastro e agendar'}
+                {loading ? "Salvando..." : "Concluir cadastro"}
               </Button>
             </form>
           )}
@@ -260,7 +350,9 @@ export default function Login() {
         <div className="flex justify-center mt-4">
           <button
             disabled={loading}
-            onClick={() => step === 'phone' ? navigate('/') : setStep('phone')}
+            onClick={() =>
+              step === "phone" ? navigate("/") : setStep("phone")
+            }
             className="inline-flex items-center gap-1.5 min-h-11 px-3 text-sm text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors disabled:opacity-50"
           >
             <ArrowLeft className="h-4 w-4" />

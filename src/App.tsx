@@ -1,90 +1,190 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link } from "react-router-dom"
+
+import { AuthProvider } from "./context/AuthContext"
+import {
+  RequireActiveAccount,
+  RequireAdmin,
+  RequireAuth,
+} from "./components/RouteGuards"
 
 // Layouts
-import ClientLayout from './components/layouts/ClientLayout'
-import AdminLayout from './components/layouts/AdminLayout'
+import ClientLayout from "./components/layouts/ClientLayout"
+import AdminLayout from "./components/layouts/AdminLayout"
 
 // Public
-import Landing from './pages/Landing'
-import Login from './pages/client/Login'
+import Landing from "./pages/Landing"
+import Login from "./pages/client/Login"
 
 // Client area
-import ClientHome from './pages/client/ClientHome'
-import Schedule from './pages/client/Schedule'
-import Appointments from './pages/client/Appointments'
-import Profile from './pages/client/Profile'
+import ClientHome from "./pages/client/ClientHome"
+import Schedule from "./pages/client/Schedule"
+import Appointments from "./pages/client/Appointments"
+import Profile from "./pages/client/Profile"
+import { AccountBlocked, PendingApproval } from "./pages/client/AccountStatus"
 
 // Admin area
-import Dashboard from './pages/admin/Dashboard'
-import Agenda from './pages/admin/Agenda'
-import AppointmentDetail from './pages/admin/AppointmentDetail'
-import Clients from './pages/admin/Clients'
-import ClientProfile from './pages/admin/ClientProfile'
-import Services from './pages/admin/Services'
-import AdminSettings from './pages/admin/Settings'
+import Dashboard from "./pages/admin/Dashboard"
+import Agenda from "./pages/admin/Agenda"
+import AppointmentDetail from "./pages/admin/AppointmentDetail"
+import Clients from "./pages/admin/Clients"
+import ClientProfile from "./pages/admin/ClientProfile"
+import Services from "./pages/admin/Services"
+import AdminSettings from "./pages/admin/Settings"
+import AdminUsers from "./pages/admin/Users"
+
+/** Tela do cliente: exige sessão e conta aprovada. */
+function ClientPage({ children }: { children: React.ReactNode }) {
+  return (
+    <RequireActiveAccount>
+      <ClientLayout>{children}</ClientLayout>
+    </RequireActiveAccount>
+  )
+}
+
+/** Tela administrativa: exige sessão e papel ADMIN (revalidado no backend). */
+function AdminPage({ children }: { children: React.ReactNode }) {
+  return (
+    <RequireAdmin>
+      <AdminLayout>{children}</AdminLayout>
+    </RequireAdmin>
+  )
+}
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Public */}
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Público */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
 
-        {/* Client area */}
-        <Route
-          path="/client"
-          element={<ClientLayout><ClientHome /></ClientLayout>}
-        />
-        <Route
-          path="/client/schedule"
-          element={<ClientLayout><Schedule /></ClientLayout>}
-        />
-        <Route
-          path="/client/appointments"
-          element={<ClientLayout><Appointments /></ClientLayout>}
-        />
-        <Route
-          path="/client/profile"
-          element={<ClientLayout><Profile /></ClientLayout>}
-        />
+          {/* Estados de conta — exigem sessão, mas não conta aprovada */}
+          <Route
+            path="/conta/pendente"
+            element={
+              <RequireAuth>
+                <PendingApproval />
+              </RequireAuth>
+            }
+          />
+          <Route path="/conta/bloqueada" element={<AccountBlocked />} />
 
-        {/* Admin area */}
-        <Route
-          path="/admin"
-          element={<AdminLayout><Dashboard /></AdminLayout>}
-        />
-        <Route
-          path="/admin/agenda"
-          element={<AdminLayout><Agenda /></AdminLayout>}
-        />
-        <Route
-          path="/admin/agenda/:id"
-          element={<AdminLayout><AppointmentDetail /></AdminLayout>}
-        />
-        <Route
-          path="/admin/clients"
-          element={<AdminLayout><Clients /></AdminLayout>}
-        />
-        <Route
-          path="/admin/clients/:id"
-          element={<AdminLayout><ClientProfile /></AdminLayout>}
-        />
-        <Route
-          path="/admin/services"
-          element={<AdminLayout><Services /></AdminLayout>}
-        />
-        <Route
-          path="/admin/settings"
-          element={<AdminLayout><AdminSettings /></AdminLayout>}
-        />
-        <Route path="*" element={
-          <main className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center">
-            <h1 className="text-2xl font-bold">Página não encontrada</h1>
-            <Link to="/" className="text-[var(--primary)] underline">Voltar ao início</Link>
-          </main>
-        } />
-      </Routes>
-    </BrowserRouter>
+          {/* Área do cliente */}
+          <Route
+            path="/client"
+            element={
+              <ClientPage>
+                <ClientHome />
+              </ClientPage>
+            }
+          />
+          <Route
+            path="/client/schedule"
+            element={
+              <ClientPage>
+                <Schedule />
+              </ClientPage>
+            }
+          />
+          <Route
+            path="/client/appointments"
+            element={
+              <ClientPage>
+                <Appointments />
+              </ClientPage>
+            }
+          />
+          <Route
+            path="/client/profile"
+            element={
+              <RequireAuth>
+                <ClientLayout>
+                  <Profile />
+                </ClientLayout>
+              </RequireAuth>
+            }
+          />
+
+          {/* Área administrativa */}
+          <Route
+            path="/admin"
+            element={
+              <AdminPage>
+                <Dashboard />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <AdminPage>
+                <AdminUsers />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/agenda"
+            element={
+              <AdminPage>
+                <Agenda />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/agenda/:id"
+            element={
+              <AdminPage>
+                <AppointmentDetail />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/clients"
+            element={
+              <AdminPage>
+                <Clients />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/clients/:id"
+            element={
+              <AdminPage>
+                <ClientProfile />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/services"
+            element={
+              <AdminPage>
+                <Services />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <AdminPage>
+                <AdminSettings />
+              </AdminPage>
+            }
+          />
+
+          <Route
+            path="*"
+            element={
+              <main className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center">
+                <h1 className="text-2xl font-bold">Página não encontrada</h1>
+                <Link to="/" className="text-[var(--primary)] underline">
+                  Voltar ao início
+                </Link>
+              </main>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }
