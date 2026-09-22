@@ -68,8 +68,12 @@ O frontend usa a porta 8443 e a API 3333 por padrão. O access token fica soment
 | `REFRESH_TOKEN_TTL_DAYS` | 30 |
 | `OTP_TTL_MINUTES` / `OTP_MAX_ATTEMPTS` | 5 minutos / 5 tentativas |
 | `AUTH_OTP_DEV_MODE` | `false`; `true` expõe OTP somente no terminal de desenvolvimento |
-| `SMS_PROVIDER` | `console` para desenvolvimento; `twilio` ainda não implementado |
-| `SMS_API_KEY` | Exigida se o provider selecionado for `twilio`; configurar a chave não implementa o envio |
+| `SMS_PROVIDER` | `console` para desenvolvimento; `twilio` obrigatório em produção |
+| `TWILIO_ACCOUNT_SID` | Obrigatória com `twilio`; formato `AC` + 32 hexadecimais |
+| `TWILIO_AUTH_TOKEN` | Obrigatória com `twilio`; mínimo 32 caracteres |
+| `TWILIO_MESSAGING_SERVICE_SID` | Remetente por Messaging Service, formato `MG` + 32 hexadecimais |
+| `TWILIO_FROM_NUMBER` | Remetente por número, em E.164. Configure este **ou** o Messaging Service |
+| `TWILIO_TIMEOUT_MS` | 10000; faixa aceita de 1000 a 30000 |
 | `BOOTSTRAP_ADMIN_PHONE` / `BOOTSTRAP_ADMIN_NAME` | Somente para o script de bootstrap |
 | `BOOTSTRAP_ADMIN_ALLOW_PROMOTION` | `false`; exige intenção explícita para promover ou reativar registro existente |
 
@@ -121,9 +125,46 @@ Se o telefone não existir, cria `ADMIN/ACTIVE`. Se já for admin ativo, não al
 
 ## Provider de SMS
 
-Envio real continua pendente. `TwilioSmsProvider.sendOtp` falha explicitamente e a API retorna 503; ela não finge sucesso. Para desenvolvimento local, selecione `SMS_PROVIDER=console` e habilite conscientemente `AUTH_OTP_DEV_MODE=true`. Essa é a única exceção de exposição do OTP, somente no terminal, e é proibida em produção.
+`SmsProvider` é a única fronteira que conhece o fornecedor. Há duas implementações: `console` (desenvolvimento) e `twilio` (produção).
 
-Antes de disponibilizar login público, implemente um provider real e teste entrega, timeout e falhas com credenciais do ambiente apropriado. Os testes automatizados capturam SMS em memória somente no processo de teste, sem endpoint de debug.
+### Twilio
+
+`TwilioSmsProvider` faz um POST em `/2010-04-01/Accounts/{SID}/Messages.json` com `fetch` nativo e autenticação Basic. Optamos pela API REST em vez do SDK oficial: a chamada é um único POST form-urlencoded, o SDK traria uma árvore grande de dependências para dentro do caminho de autenticação, e injetar `fetch` permite testar falhas, timeouts e respostas do provedor sem disparar SMS.
+
+O código continua sendo gerado, hasheado e validado pelo backend. A Twilio é só transporte e nunca decide o conteúdo do OTP. A mensagem é fixa:
+
+> ERICKCORTTES BARBEARIA: seu código de confirmação é XXXXXX. Não compartilhe este código.
+
+**Nomes das variáveis.** As antigas `SMS_API_KEY`/`SMS_API_SECRET`/`SMS_FROM_NUMBER` pertenciam ao provider ainda não implementado e foram substituídas por nomes explícitos do provedor. Um Account SID não é uma "API key" — a Twilio tem os dois conceitos, e guardar um no nome do outro convida a erro de configuração. `SMS_PROVIDER` permanece como a chave que seleciona a implementação.
+
+**Remetente.** A Twilio aceita `MessagingServiceSid` ou `From`. Exigir os dois impediria integrações legítimas; não exigir nenhum deixaria subir um servidor incapaz de enviar. A regra é: pelo menos um dos dois, e quando ambos estiverem presentes o Messaging Service tem precedência.
+
+**Validação no boot.** Com `SMS_PROVIDER=twilio`, a validação de ambiente exige Account SID, Auth Token e um remetente, e confere o formato de cada um. Formatos inválidos são recusados mesmo com o provider desligado. O construtor repete as checagens essenciais, então o provider não depende de ter sido criado pelo caminho feliz. Produção continua recusando `SMS_PROVIDER=console` e `AUTH_OTP_DEV_MODE=true`.
+
+**Falhas.** Timeout (`AbortSignal.timeout`), erro de rede, HTTP de erro e mensagem marcada como `failed`/`undelivered`/`canceled` num 201 são todos tratados como falha de envio. O provider lança `SMS_UNAVAILABLE`; `requestOtp` invalida o desafio que não foi entregue e a API responde 503. Respostas sem JSON válido, sem Message SID válido, com status desconhecido ou com HTTP diferente de 201 também falham. Redirecionamentos HTTP são recusados.
+
+Nada da Twilio atravessa a fronteira HTTP: o cliente recebe sempre a mesma mensagem genérica, sem código de erro do provedor, corpo da resposta ou stack. O log guarda apenas o operacional — telefone mascarado, `messageSid`, status HTTP, código de erro conhecido do provedor e uma classificação (`credenciais-invalidas`, `destinatario-invalido`, `configuracao-invalida`, `limite-do-provedor`, `provedor-indisponivel`). O corpo da mensagem, que carrega o OTP, nunca é registrado, e o redator do logger também cobre as chaves da Twilio.
+
+Para desenvolvimento local, selecione `SMS_PROVIDER=console` e habilite conscientemente `AUTH_OTP_DEV_MODE=true`. Essa é a única exceção de exposição do OTP, somente no terminal, e é proibida em produção. Os testes automatizados usam um `fetch` de mentira e capturam SMS em memória somente no processo de teste, sem endpoint de debug.
+
+**Aceitação não confirma entrega.** O log informa que a solicitação foi aceita pela Twilio. Os estados `accepted`/`queued` indicam processamento pendente; pode ocorrer falha posterior na operadora. Não há acompanhamento por webhook nesta implementação. A entrega real precisa ser conferida no painel da Twilio e no telefone de teste antes de liberar autenticação pública. Não repetimos automaticamente um envio após timeout, pois o provedor pode já tê-lo aceitado.
+
+### Deploy com Twilio
+
+No serviço de backend, configure:
+
+```
+SMS_PROVIDER=twilio
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_MESSAGING_SERVICE_SID=MG...   # ou TWILIO_FROM_NUMBER=+55...
+TWILIO_TIMEOUT_MS=10000
+AUTH_OTP_DEV_MODE=false
+```
+
+Em conta trial a Twilio só entrega para números verificados e prefixa a mensagem; o erro 21608 no log indica exatamente isso. Entrega para o Brasil exige remetente e cadastro compatíveis com as regras locais da operadora.
+
+A implementação automatizada foi auditada sem disparos reais de SMS. A autenticação pública ainda depende de teste real de entrega no ambiente Railway, com credenciais e destinatário autorizados. Consulte [a auditoria Twilio](twilio_security_audit.md) para os resultados e pendências.
 
 ## Rotas
 
@@ -177,7 +218,7 @@ A execução e os achados da auditoria estão em [security_best_practices_report
 
 ## Limites operacionais atuais
 
-- Envio real de SMS ainda não implementado.
+- API real de SMS implementada; entrega real ainda não validada. Aceitação pelo provedor não comprova recebimento no aparelho.
 - Renovação single-flight coordena a mesma página; duas abas independentes ainda podem provocar a política conservadora de revogação por reuso se rotacionarem o mesmo cookie simultaneamente.
 - Logout sem conexão encerra o estado em memória, mas não garante a remoção do cookie httpOnly no servidor/navegador; uma recarga pode restaurar a sessão até que a revogação remota tenha sucesso.
 - Ainda não existe job de retenção para desafios e sessões expiradas. Defina manutenção antes de operação prolongada; não remova desafios recentes usados pelo limite de 15 minutos nem histórico necessário à detecção de reuso.

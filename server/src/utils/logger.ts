@@ -20,6 +20,11 @@ const REDACTED_KEYS = new Set([
   "database_url",
   "sms_api_key",
   "sms_api_secret",
+  "twilio_auth_token",
+  "twilio_account_sid",
+  "authtoken",
+  "accountsid",
+  "body",
 ])
 
 function redact(value: unknown, depth = 0): unknown {

@@ -51,9 +51,32 @@ const envSchema = z
       .transform((value) => value === "true"),
 
     SMS_PROVIDER: z.enum(["console", "twilio"]).default("console"),
-    SMS_API_KEY: z.string().optional(),
-    SMS_API_SECRET: z.string().optional(),
-    SMS_FROM_NUMBER: z.string().optional(),
+
+    // Credenciais da Twilio. Nomes explícitos do provedor em vez de genéricos:
+    // um Account SID não é uma "API key" — a Twilio tem os dois conceitos, e
+    // guardar um no nome do outro convida a erro de configuração em produção.
+    TWILIO_ACCOUNT_SID: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().optional(),
+    ),
+    TWILIO_AUTH_TOKEN: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().optional(),
+    ),
+    TWILIO_FROM_NUMBER: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().optional(),
+    ),
+    TWILIO_MESSAGING_SERVICE_SID: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().optional(),
+    ),
+    TWILIO_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .max(30000)
+      .default(10000),
 
     BOOTSTRAP_ADMIN_PHONE: z.string().optional(),
     BOOTSTRAP_ADMIN_NAME: z.preprocess(
@@ -131,12 +154,68 @@ const envSchema = z
       })
     }
 
-    if (env.SMS_PROVIDER === "twilio" && !env.SMS_API_KEY) {
+    // Formatos validados mesmo fora do provider ativo: se a variável está
+    // presente mas errada, é erro de configuração — falhar no boot é melhor
+    // que descobrir na primeira tentativa de login.
+    if (
+      env.TWILIO_ACCOUNT_SID &&
+      !/^AC[0-9a-fA-F]{32}$/.test(env.TWILIO_ACCOUNT_SID)
+    ) {
       ctx.addIssue({
         code: "custom",
-        path: ["SMS_API_KEY"],
-        message: "SMS_API_KEY é obrigatória quando SMS_PROVIDER=twilio",
+        path: ["TWILIO_ACCOUNT_SID"],
+        message: "TWILIO_ACCOUNT_SID deve ser o Account SID no formato AC + 32 hexadecimais",
       })
+    }
+    if (
+      env.TWILIO_MESSAGING_SERVICE_SID &&
+      !/^MG[0-9a-fA-F]{32}$/.test(env.TWILIO_MESSAGING_SERVICE_SID)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["TWILIO_MESSAGING_SERVICE_SID"],
+        message:
+          "TWILIO_MESSAGING_SERVICE_SID deve estar no formato MG + 32 hexadecimais",
+      })
+    }
+    if (
+      env.TWILIO_FROM_NUMBER &&
+      !/^\+[1-9]\d{6,14}$/.test(env.TWILIO_FROM_NUMBER)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["TWILIO_FROM_NUMBER"],
+        message: "TWILIO_FROM_NUMBER deve estar em E.164, ex.: +15005550006",
+      })
+    }
+
+    if (env.SMS_PROVIDER === "twilio") {
+      if (!env.TWILIO_ACCOUNT_SID) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["TWILIO_ACCOUNT_SID"],
+          message: "TWILIO_ACCOUNT_SID é obrigatória quando SMS_PROVIDER=twilio",
+        })
+      }
+      if (!env.TWILIO_AUTH_TOKEN || env.TWILIO_AUTH_TOKEN.length < 32) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["TWILIO_AUTH_TOKEN"],
+          message:
+            "TWILIO_AUTH_TOKEN é obrigatória quando SMS_PROVIDER=twilio (32 caracteres)",
+        })
+      }
+      // A Twilio aceita remetente por número OU por Messaging Service.
+      // Exigir os dois impediria integrações legítimas; exigir nenhum deixaria
+      // subir um servidor incapaz de enviar. Exatamente um basta.
+      if (!env.TWILIO_FROM_NUMBER && !env.TWILIO_MESSAGING_SERVICE_SID) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["TWILIO_FROM_NUMBER"],
+          message:
+            "Configure TWILIO_MESSAGING_SERVICE_SID ou TWILIO_FROM_NUMBER quando SMS_PROVIDER=twilio",
+        })
+      }
     }
   })
 

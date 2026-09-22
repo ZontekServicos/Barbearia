@@ -253,6 +253,81 @@ describe("Express + Prisma + PostgreSQL real", { skip: !enabled }, () => {
       0,
     )
   })
+  it("Twilio rejection and malformed success return 503 and invalidate the challenge", async () => {
+    const { TwilioSmsProvider } = await import("../modules/auth/sms/sms-provider.js")
+    for (const [httpStatus, payload] of [[401, { code: 20003 }], [503, {}], [201, {}], [201, { status: "failed" }]] as const) {
+      const target = phone()
+      let transportedCode = ""
+      const provider = new TwilioSmsProvider({
+        accountSid: "AC" + "1".repeat(32), authToken: "2".repeat(32),
+        fromNumber: "+15005550006", timeoutMs: 1000,
+      }, async (_url, init) => {
+        transportedCode = new URLSearchParams(String(init.body)).get("Body")!.match(/\d{6}/)![0]
+        return { ok: httpStatus === 201, status: httpStatus, text: async () => JSON.stringify(payload) }
+      })
+      sms.sendOtp = provider.sendOtp.bind(provider)
+      const response = await call("/auth/request-otp", { body: { phone: target } })
+      assert.equal(response.status, 503)
+      assert.ok(!JSON.stringify(response.body).includes(transportedCode))
+      assert.doesNotMatch(JSON.stringify(response.body), /twilio|20003|stack/i)
+      assert.equal(await prisma.otpChallenge.count({ where: { phone: target, consumedAt: null } }), 0)
+      await assert.rejects(auth.verifyOtp(target, transportedCode), { code: "OTP_INVALID" })
+    }
+  })
+  it("Twilio acceptance transports the backend OTP without exposing it in API responses", async () => {
+    const { TwilioSmsProvider } = await import("../modules/auth/sms/sms-provider.js")
+    const target = phone()
+    let transportedCode = ""
+    const provider = new TwilioSmsProvider({
+      accountSid: "AC" + "1".repeat(32), authToken: "2".repeat(32),
+      messagingServiceSid: "MG" + "3".repeat(32), timeoutMs: 1000,
+    }, async (_url, init) => {
+      const body = new URLSearchParams(String(init.body))
+      assert.equal(body.get("To"), target)
+      transportedCode = body.get("Body")!.match(/\d{6}/)![0]
+      return { ok: true, status: 201, text: async () => JSON.stringify({ sid: "SM" + "4".repeat(32), status: "accepted" }) }
+    })
+    sms.sendOtp = provider.sendOtp.bind(provider)
+    const response = await call("/auth/request-otp", { body: { phone: target } })
+    assert.equal(response.status, 200)
+    assert.ok(!JSON.stringify(response.body).includes(transportedCode))
+    const verified = await call("/auth/verify-otp", { body: { phone: target, code: transportedCode, fullName: "Twilio QA" } })
+    assert.equal(verified.status, 201)
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { phone: target } })).status, "PENDING")
+    await assert.rejects(auth.verifyOtp(target, transportedCode), { code: "OTP_INVALID" })
+  })
+
+  it("falha de envio consome a cota do telefone e não libera tentativas extras", async () => {
+    const target = phone()
+    sms.sendOtp = originalSend.bind(sms) // Envio indisponível.
+    for (let i = 0; i < 5; i++) {
+      const r = await call("/auth/request-otp", { body: { phone: target } })
+      assert.equal(r.status, 503)
+    }
+    // Desafios que falharam continuam contando: ninguém queima SMS de graça.
+    assert.equal(await prisma.otpChallenge.count({ where: { phone: target } }), 5)
+    sms.sendOtp = async () => {}
+    // Zera o limite por IP: o 429 seguinte só pode vir do limite durável
+    // por telefone, que é o que precisamos provar aqui.
+    limits.requestOtpRateLimit.resetKey("127.0.0.1")
+    assert.equal(
+      (await call("/auth/request-otp", { body: { phone: target } })).status,
+      429,
+    )
+    // Outro telefone, mesmo IP, continua atendido: o limite é por telefone.
+    assert.equal(
+      (await call("/auth/request-otp", { body: { phone: phone() } })).status,
+      200,
+    )
+    // Nenhum desafio sobrou ativo, então nenhum código pode autenticar.
+    assert.equal(
+      await prisma.otpChallenge.count({
+        where: { phone: target, consumedAt: null },
+      }),
+      0,
+    )
+  })
+
   it("rate limits HTTP de pedido, verificação e rotas gerais são independentes", async () => {
     for (let i = 0; i < 5; i++)
       assert.equal(
