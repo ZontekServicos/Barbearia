@@ -10,11 +10,6 @@ Object.assign(process.env, {
   DATABASE_URL: "postgresql://unused@127.0.0.1:1/not_used",
   JWT_ACCESS_SECRET: secret,
   FRONTEND_URL: "https://app.example.com",
-  SMS_PROVIDER: "twilio",
-  TWILIO_ACCOUNT_SID: "AC" + "0".repeat(32),
-  TWILIO_AUTH_TOKEN: "test".repeat(8),
-  TWILIO_FROM_NUMBER: "+15005550006",
-  AUTH_OTP_DEV_MODE: "false",
   REFRESH_COOKIE_SAME_SITE: "none",
   REFRESH_COOKIE_PATH: "/api/auth",
 })

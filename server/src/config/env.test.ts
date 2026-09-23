@@ -17,7 +17,7 @@ let cacheBuster = 0
 async function loadEnvWith(overrides: Record<string, string | undefined>) {
   const snapshot = { ...process.env }
   try {
-    for (const key of [...Object.keys(BASE_ENV), "SMS_PROVIDER", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER", "TWILIO_MESSAGING_SERVICE_SID", "TWILIO_TIMEOUT_MS"]) delete process.env[key]
+    for (const key of Object.keys(BASE_ENV)) delete process.env[key]
     Object.assign(process.env, BASE_ENV, overrides)
     for (const [key, value] of Object.entries(overrides)) {
       if (value === undefined) delete process.env[key]
@@ -34,38 +34,9 @@ describe("validação de ambiente", () => {
   it("aceita uma configuração de desenvolvimento válida", async () => {
     const mod = await loadEnvWith({
       NODE_ENV: "development",
-      AUTH_OTP_DEV_MODE: "true",
     })
     assert.equal(mod.env.NODE_ENV, "development")
-    assert.equal(mod.env.AUTH_OTP_DEV_MODE, true)
     assert.equal(mod.isProduction, false)
-  })
-
-  it("recusa AUTH_OTP_DEV_MODE em produção", async () => {
-    await assert.rejects(
-      () =>
-        loadEnvWith({
-          NODE_ENV: "production",
-          AUTH_OTP_DEV_MODE: "true",
-          SMS_PROVIDER: "twilio",
-          TWILIO_ACCOUNT_SID: "AC" + "0".repeat(32),
-          TWILIO_AUTH_TOKEN: "test".repeat(8),
-          TWILIO_FROM_NUMBER: "+15005550006",
-        }),
-      /AUTH_OTP_DEV_MODE não pode ser habilitado em produção/,
-    )
-  })
-
-  it("recusa provider de SMS console em produção", async () => {
-    await assert.rejects(
-      () =>
-        loadEnvWith({
-          NODE_ENV: "production",
-          AUTH_OTP_DEV_MODE: "false",
-          SMS_PROVIDER: "console",
-        }),
-      /configure um provider real de SMS/,
-    )
   })
 
   it("refresh opaco não exige segredo JWT de refresh", async () => {
@@ -106,11 +77,6 @@ describe("validação de ambiente", () => {
 
 const secureProduction = {
   NODE_ENV: "production",
-  SMS_PROVIDER: "twilio",
-  TWILIO_ACCOUNT_SID: "AC" + "0".repeat(32),
-  TWILIO_AUTH_TOKEN: "test".repeat(8),
-  TWILIO_FROM_NUMBER: "+15005550006",
-  AUTH_OTP_DEV_MODE: "false",
   FRONTEND_URL: "https://app.example.com",
   JWT_ACCESS_SECRET:
     "92136ade80bc57ff427181b2d3dd6ec84524356a170823729a804bae5d2f011b",
@@ -149,91 +115,4 @@ it("recusa banco não PostgreSQL, cookie path amplo e trust proxy arbitrário", 
     { TRUST_PROXY_HOPS: "100" },
   ])
     await assert.rejects(loadEnvWith({ NODE_ENV: "development", ...values }))
-})
-
-describe("credenciais da Twilio", () => {
-  const SID = "AC" + "0".repeat(32)
-  const TOKEN = "test".repeat(8)
-
-  it("recusa SMS_PROVIDER=twilio sem Account SID e Auth Token", async () => {
-    await assert.rejects(
-      () => loadEnvWith({ NODE_ENV: "development", SMS_PROVIDER: "twilio" }),
-      /TWILIO_ACCOUNT_SID é obrigatória/,
-    )
-    await assert.rejects(
-      () =>
-        loadEnvWith({
-          NODE_ENV: "development",
-          SMS_PROVIDER: "twilio",
-          TWILIO_ACCOUNT_SID: SID,
-          TWILIO_FROM_NUMBER: "+15005550006",
-        }),
-      /TWILIO_AUTH_TOKEN é obrigatória/,
-    )
-  })
-
-  it("recusa twilio sem remetente: nem número, nem Messaging Service", async () => {
-    await assert.rejects(
-      () =>
-        loadEnvWith({
-          NODE_ENV: "development",
-          SMS_PROVIDER: "twilio",
-          TWILIO_ACCOUNT_SID: SID,
-          TWILIO_AUTH_TOKEN: TOKEN,
-        }),
-      /TWILIO_MESSAGING_SERVICE_SID ou TWILIO_FROM_NUMBER/,
-    )
-  })
-
-  it("aceita apenas o Messaging Service como remetente", async () => {
-    const mod = await loadEnvWith({
-      NODE_ENV: "development",
-      SMS_PROVIDER: "twilio",
-      TWILIO_ACCOUNT_SID: SID,
-      TWILIO_AUTH_TOKEN: TOKEN,
-      TWILIO_MESSAGING_SERVICE_SID: "MG" + "0".repeat(32),
-    })
-    assert.equal(mod.env.TWILIO_FROM_NUMBER, undefined)
-    assert.equal(mod.env.TWILIO_TIMEOUT_MS, 10000)
-  })
-
-  it("recusa identificadores e remetente com formato inválido", async () => {
-    for (const invalid of [
-      { TWILIO_ACCOUNT_SID: "minha-conta" },
-      { TWILIO_ACCOUNT_SID: SID, TWILIO_MESSAGING_SERVICE_SID: "MG123" },
-      { TWILIO_ACCOUNT_SID: SID, TWILIO_FROM_NUMBER: "11999998888" },
-    ])
-      await assert.rejects(
-        () =>
-          loadEnvWith({
-            NODE_ENV: "development",
-            TWILIO_AUTH_TOKEN: TOKEN,
-            ...invalid,
-          }),
-        /formato|E\.164/,
-      )
-  })
-
-  it("recusa timeout fora da faixa operacional", async () => {
-    for (const timeout of ["10", "120000"])
-      await assert.rejects(() =>
-        loadEnvWith({ NODE_ENV: "development", TWILIO_TIMEOUT_MS: timeout }),
-      )
-  })
-})
-
-it("rejects missing, blank or short Twilio tokens without leaking their values", async () => {
-  for (const token of [undefined, "", "  ", "synthetic-short-value"]) {
-    await assert.rejects(loadEnvWith({ ...secureProduction, TWILIO_AUTH_TOKEN: token }), (error: unknown) => {
-      assert.match(String(error), /TWILIO_AUTH_TOKEN/)
-      if (token && token.trim()) assert.ok(!String(error).includes(token))
-      return true
-    })
-  }
-})
-it("accepts Messaging Service alone in production and rejects unknown providers", async () => {
-  const mod = await loadEnvWith({ ...secureProduction, TWILIO_FROM_NUMBER: undefined, TWILIO_MESSAGING_SERVICE_SID: "MG" + "1".repeat(32) })
-  assert.equal(mod.env.SMS_PROVIDER, "twilio")
-  assert.equal(mod.env.AUTH_OTP_DEV_MODE, false)
-  await assert.rejects(loadEnvWith({ ...secureProduction, SMS_PROVIDER: "invalid" }))
 })

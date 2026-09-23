@@ -6,9 +6,38 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/Logo'
-import { SERVICES, BUSINESS_HOURS } from '@/data/mock'
+import { useEffect, useState } from 'react'
+import {
+  listBusinessHours,
+  listServices,
+  type BusinessHoursDay,
+  type Service,
+} from '@/services/booking'
+
+const WEEKDAY_NAMES = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+
+/** Semana começando na segunda, como o cliente espera ler. */
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
 
 export default function Landing() {
+  const [services, setServices] = useState<Service[] | null>(null)
+  const [week, setWeek] = useState<BusinessHoursDay[] | null>(null)
+
+  // Catálogo e expediente são públicos: a vitrine carrega sem exigir login.
+  useEffect(() => {
+    let cancelled = false
+
+    void listServices()
+      .then(result => { if (!cancelled) setServices(result) })
+      .catch(() => { if (!cancelled) setServices([]) })
+
+    void listBusinessHours()
+      .then(result => { if (!cancelled) setWeek(result) })
+      .catch(() => { if (!cancelled) setWeek([]) })
+
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <div className="relative isolate min-h-screen text-[var(--foreground)]">
       <div aria-hidden="true" className="fixed inset-0 -z-10 pointer-events-none">
@@ -34,7 +63,7 @@ export default function Landing() {
               Área Admin
             </Link>
             <Button asChild size="sm">
-              <Link to="/login">Agendar</Link>
+              <Link to="/agendar">Agendar</Link>
             </Button>
           </div>
         </div>
@@ -63,7 +92,7 @@ export default function Landing() {
             Agende seu horário pelo celular de forma rápida e sem complicação.
           </h1>
           <Button asChild size="lg" className="w-full sm:w-auto text-base h-12 px-8">
-            <Link to="/login">Agendar horário <ArrowRight className="ml-2 h-4 w-4" /></Link>
+            <Link to="/agendar">Agendar horário <ArrowRight className="ml-2 h-4 w-4" /></Link>
           </Button>
         </div>
       </section>
@@ -80,8 +109,17 @@ export default function Landing() {
             <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase">Serviços</h2>
           </div>
 
+          {services === null ? (
+            <p role="status" className="text-center text-sm text-[var(--muted-foreground)]">
+              Carregando serviços…
+            </p>
+          ) : services.length === 0 ? (
+            <p className="text-center text-sm text-[var(--muted-foreground)]">
+              Nenhum serviço disponível no momento.
+            </p>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {SERVICES.filter(s => s.active).map((service) => (
+            {services.map((service) => (
               <div
                 key={service.id}
                 className="group relative border border-[var(--primary)]/25 bg-[rgba(38,31,18,0.5)] backdrop-blur-md shadow-[0_4px_18px_rgba(0,0,0,0.45)] rounded-2xl p-6 transition-all hover:-translate-y-1 hover:bg-[rgba(52,42,24,0.6)] hover:border-[var(--primary)]/55 hover:shadow-[0_12px_32px_rgba(201,169,98,0.15)]"
@@ -93,7 +131,7 @@ export default function Landing() {
                     <Scissors className="h-5.5 w-5.5 text-[var(--primary)]" />
                   </div>
                   <span className="font-display text-2xl font-bold text-[var(--primary)]">
-                    R$ {service.price}
+                    R$ {service.priceFormatted}
                   </span>
                 </div>
                 <h3 className="font-semibold text-lg mb-1.5">{service.name}</h3>
@@ -102,10 +140,10 @@ export default function Landing() {
                 <div className="flex items-center justify-between pt-4 border-t border-[var(--primary)]/20">
                   <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                     <Clock className="h-3.5 w-3.5" />
-                    <span>{service.duration} minutos</span>
+                    <span>{service.durationMinutes} minutos</span>
                   </div>
                   <Link
-                    to="/login"
+                    to="/agendar"
                     className="inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-[var(--primary)] hover:text-[var(--primary-light)] transition-colors"
                   >
                     Agendar
@@ -115,10 +153,11 @@ export default function Landing() {
               </div>
             ))}
           </div>
+          )}
 
           <div className="text-center mt-10">
             <Button asChild size="lg">
-              <Link to="/login">
+              <Link to="/agendar">
                 Agendar agora <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
@@ -170,20 +209,36 @@ export default function Landing() {
           {/* Hours */}
           <div>
             <h2 className="font-sans text-[var(--primary)] text-sm font-medium tracking-widest uppercase mb-6">Horários</h2>
-            <div className="space-y-2">
-              {BUSINESS_HOURS.map((h) => (
-                <div key={h.day} className="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
-                  <span className={`text-sm font-medium ${h.open ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]'}`}>
-                    {h.day}
-                  </span>
-                  {h.open ? (
-                    <span className="text-sm text-[var(--foreground)]">{h.start} – {h.end}</span>
-                  ) : (
-                    <span className="text-xs bg-[var(--secondary)] text-[var(--muted-foreground)] px-2 py-0.5 rounded-full">Fechado</span>
-                  )}
-                </div>
-              ))}
-            </div>
+            {week === null ? (
+              <p role="status" className="text-sm text-[var(--muted-foreground)]">
+                Carregando horários…
+              </p>
+            ) : week.length === 0 ? (
+              <p className="text-sm text-[var(--muted-foreground)]">
+                Horários indisponíveis no momento.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {WEEK_ORDER.map(weekday => {
+                  const day = week.find(entry => entry.weekday === weekday)
+                  if (!day) return null
+                  return (
+                    <div key={weekday} className="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
+                      <span className={`text-sm font-medium ${day.closed ? 'text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}`}>
+                        {WEEKDAY_NAMES[weekday]}
+                      </span>
+                      {day.closed ? (
+                        <span className="text-xs bg-[var(--secondary)] text-[var(--muted-foreground)] px-2 py-0.5 rounded-full">Fechado</span>
+                      ) : (
+                        <span className="text-sm text-[var(--foreground)] tabular-nums">
+                          {day.opensAt} – {day.closesAt}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
           {/* Info */}
@@ -245,7 +300,7 @@ export default function Landing() {
             </div>
             <div className="relative z-10">
               <Button asChild size="lg" className="text-base h-12 px-10">
-                <Link to="/login">
+                <Link to="/agendar">
                   Agendar horário <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>

@@ -1,3 +1,5 @@
+import { newPasswordSchema, confirmationSchema } from "../auth/auth.schemas.js"
+import { passwordChangeRateLimit } from "../../middlewares/rate-limit.js"
 import { Router } from "express"
 import { z } from "zod"
 import {
@@ -13,13 +15,18 @@ import {
   listAuditLog,
   listUsers,
   updateUserStatus,
+  resetUserPassword,
 } from "./admin.service.js"
+import { bookingAdminRouter } from "../booking/booking.admin.routes.js"
 
 export const adminRouter = Router()
 
 // Toda rota daqui para baixo exige sessão válida E papel ADMIN, verificados no
 // banco a cada requisição. O frontend não participa dessa decisão.
 adminRouter.use(requireAuth, requireActiveAccount, requireRole("ADMIN"))
+
+// Agenda, serviços, bloqueios e fichas de cliente herdam a mesma proteção.
+adminRouter.use(bookingAdminRouter)
 
 const listUsersQuerySchema = z.object({
   status: z.enum(["PENDING", "ACTIVE", "BLOCKED"]).optional(),
@@ -78,3 +85,17 @@ adminRouter.patch(
 adminRouter.get("/audit-log", async (_req, res) => {
   return sendSuccess(res, { entries: await listAuditLog() })
 })
+
+/** Redefinição assistida; a resposta nunca contém senha. */
+const resetPasswordSchema = z.strictObject({ password: newPasswordSchema, confirmPassword: confirmationSchema })
+  .refine((value) => value.password === value.confirmPassword, { path: ["confirmPassword"], message: "As senhas não conferem." })
+adminRouter.post(
+  "/users/:id/reset-password",
+  passwordChangeRateLimit,
+  validate({ params: userIdParamsSchema, body: resetPasswordSchema }),
+  async (req, res) => {
+    const { id } = req.params as z.infer<typeof userIdParamsSchema>
+    const { password } = req.body as z.infer<typeof resetPasswordSchema>
+    return sendSuccess(res, await resetUserPassword(req.user!.id, id, password))
+  },
+)

@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Check, Scissors, Clock,
-  CalendarCheck, ChevronLeft, ChevronRight
+  CalendarCheck, ChevronLeft, ChevronRight, AlertCircle, RefreshCw
 } from 'lucide-react'
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
@@ -11,9 +11,24 @@ import {
 } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Button } from '@/components/ui/button'
-import { SERVICES, AVAILABLE_TIMES, OCCUPIED_TIMES_BY_DATE, CLOSED_DAYS } from '@/data/mock'
-import type { Service } from '@/data/mock'
+import { ApiError } from '@/services/api'
+import {
+  createAppointment,
+  getAvailability,
+  listBusinessHours,
+  listServices,
+  type Appointment,
+  type AvailableSlot,
+  type BusinessHoursDay,
+  type Service,
+} from '@/services/booking'
 import { cn } from '@/lib/utils'
+import { useAuth, type AuthStatus } from '@/context/AuthContext'
+import {
+  clearBookingIntent,
+  readBookingIntent,
+  saveBookingIntent,
+} from '@/services/booking-intent'
 
 type Step = 'service' | 'date' | 'time' | 'confirm' | 'success'
 
@@ -23,6 +38,36 @@ const STEPS: { key: Step; label: string }[] = [
   { key: 'time', label: 'Horário' },
   { key: 'confirm', label: 'Confirmar' },
 ]
+
+function describeError(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback
+}
+
+/** Estado de carregamento padrão das etapas. */
+function LoadingState({ label }: { label: string }) {
+  return (
+    <p role="status" className="text-sm text-[var(--muted-foreground)] py-6 text-center">
+      {label}
+    </p>
+  )
+}
+
+/** Erro real da API, com opção de tentar de novo. Nunca cai para dados locais. */
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="border border-red-500/40 bg-red-500/10 rounded-2xl p-5 text-center"
+    >
+      <AlertCircle className="h-8 w-8 text-red-400 mx-auto mb-3" />
+      <p className="text-sm text-red-200 mb-4">{message}</p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+        Tentar novamente
+      </Button>
+    </div>
+  )
+}
 
 function StepProgress({ current }: { current: Step }) {
   const steps = STEPS
@@ -64,8 +109,24 @@ function StepProgress({ current }: { current: Step }) {
 }
 
 function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
+  const [services, setServices] = useState<Service[]>([])
   const [selected, setSelected] = useState<string | null>(null)
-  const active = SERVICES.filter(s => s.active)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setServices(await listServices())
+    } catch (err) {
+      setError(describeError(err, 'Não foi possível carregar os serviços.'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
 
   return (
     <div>
@@ -74,58 +135,73 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
         <p className="text-sm text-[var(--muted-foreground)] mt-1">Selecione o que você precisa hoje.</p>
       </div>
 
-      <div className="space-y-3 mb-6">
-        {active.map(service => (
-          <button
-            key={service.id}
-            aria-pressed={selected === service.id}
-            onClick={() => setSelected(service.id)}
-            className={cn(
-              'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
-              selected === service.id
-                ? 'border-[var(--primary)] bg-[var(--primary)]/12'
-                : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/45'
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <div className={cn(
-                'w-10 h-10 rounded-full border flex items-center justify-center transition-colors',
-                selected === service.id
-                  ? 'border-[var(--primary)]/50 bg-[var(--primary)]/25'
-                  : 'border-[var(--primary)]/30 bg-[var(--primary)]/10'
-              )}>
-                <Scissors className={cn('h-5 w-5', selected === service.id ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]')} />
-              </div>
-              <div>
-                <p className="font-semibold text-[var(--foreground)]">{service.name}</p>
-                <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] mt-0.5">
-                  <Clock className="h-3 w-3" />
-                  <span>{service.duration} min</span>
+      {loading ? (
+        <LoadingState label="Carregando serviços…" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => void load()} />
+      ) : services.length === 0 ? (
+        <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-2xl p-8 text-center">
+          <Scissors className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
+          <p className="text-sm text-[var(--muted-foreground)]">
+            Nenhum serviço disponível no momento.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-3 mb-6">
+            {services.map(service => (
+              <button
+                key={service.id}
+                aria-pressed={selected === service.id}
+                onClick={() => setSelected(service.id)}
+                className={cn(
+                  'w-full flex items-center justify-between p-4 rounded-xl border transition-all text-left',
+                  selected === service.id
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/12'
+                    : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/45'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    'w-10 h-10 rounded-full border flex items-center justify-center transition-colors',
+                    selected === service.id
+                      ? 'border-[var(--primary)]/50 bg-[var(--primary)]/25'
+                      : 'border-[var(--primary)]/30 bg-[var(--primary)]/10'
+                  )}>
+                    <Scissors className={cn('h-5 w-5', selected === service.id ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]')} />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-[var(--foreground)]">{service.name}</p>
+                    <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] mt-0.5">
+                      <Clock className="h-3 w-3" />
+                      <span>{service.durationMinutes} min</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-[var(--primary)]">R$ {service.price}</span>
-              {selected === service.id && (
-                <div className="w-5 h-5 rounded-full bg-[var(--primary)] flex items-center justify-center">
-                  <Check className="h-3 w-3 text-black" />
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[var(--primary)]">R$ {service.priceFormatted}</span>
+                  {selected === service.id && (
+                    <div className="w-5 h-5 rounded-full bg-[var(--primary)] flex items-center justify-center">
+                      <Check className="h-3 w-3 text-black" />
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </button>
-        ))}
-      </div>
+              </button>
+            ))}
+          </div>
 
-      <Button
-        className="w-full h-12"
-        disabled={!selected}
-        onClick={() => {
-          const service = SERVICES.find(s => s.id === selected)!
-          onSelect(service)
-        }}
-      >
-        Continuar
-      </Button>
+          <Button
+            className="w-full h-12"
+            disabled={!selected}
+            onClick={() => {
+              const service = services.find(s => s.id === selected)
+              if (service) onSelect(service)
+            }}
+          >
+            Continuar
+          </Button>
+        </>
+      )}
     </div>
   )
 }
@@ -133,19 +209,35 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
 function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: () => void }) {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selected, setSelected] = useState<Date | null>(null)
+  const [week, setWeek] = useState<BusinessHoursDay[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const today = startOfDay(new Date())
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      setWeek(await listBusinessHours())
+    } catch (err) {
+      setError(describeError(err, 'Não foi possível carregar o funcionamento da barbearia.'))
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
 
   const days = eachDayOfInterval({
     start: startOfMonth(currentMonth),
     end: endOfMonth(currentMonth),
   })
 
-  const firstDayOfWeek = getDay(startOfMonth(currentMonth)) // 0=Sun
-
+  const firstDayOfWeek = getDay(startOfMonth(currentMonth))
   const weekDays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
-  const isDisabled = (day: Date) =>
-    isBefore(day, today) || CLOSED_DAYS.includes(getDay(day))
+  // Dias fechados vêm do expediente real, não de uma constante local.
+  const isDisabled = (day: Date) => {
+    if (isBefore(day, today)) return true
+    const config = week?.find(entry => entry.weekday === getDay(day))
+    return config?.closed ?? false
+  }
 
   return (
     <div>
@@ -159,90 +251,120 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
         </div>
       </div>
 
-      <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
-        {/* Month header */}
-        <div className="flex items-center justify-between mb-4">
-          <button
-            aria-label="Mês anterior"
-            onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
-            className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <span className="font-semibold text-sm capitalize">
-            {format(currentMonth, "MMMM 'de' yyyy", { locale: ptBR })}
-          </span>
-          <button
-            aria-label="Próximo mês"
-            onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
-            className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Week days header */}
-        <div className="grid grid-cols-7 mb-2">
-          {weekDays.map(d => (
-            <div key={d} className="text-center text-xs text-[var(--muted-foreground)] font-medium py-1">{d}</div>
-          ))}
-        </div>
-
-        {/* Days grid */}
-        <div className="grid grid-cols-7 gap-0.5">
-          {/* Empty cells for first week */}
-          {Array.from({ length: firstDayOfWeek }).map((_, i) => (
-            <div key={`empty-${i}`} />
-          ))}
-          {days.map(day => {
-            const disabled = isDisabled(day)
-            const sel = selected && isSameDay(day, selected)
-            const todayDay = isToday(day)
-            return (
+      {error ? (
+        <ErrorState message={error} onRetry={() => void load()} />
+      ) : !week ? (
+        <LoadingState label="Carregando calendário…" />
+      ) : (
+        <>
+          <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-4 mb-6">
+            <div className="flex items-center justify-between mb-4">
               <button
-                key={day.toISOString()}
-                aria-label={format(day, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
-                aria-pressed={!!sel}
-                disabled={disabled}
-                onClick={() => setSelected(day)}
-                className={cn(
-                  'aspect-square flex items-center justify-center text-sm rounded-lg transition-all',
-                  sel && 'bg-[var(--primary)] text-black font-bold',
-                  !sel && todayDay && 'border border-[var(--primary)]/50 text-[var(--primary)]',
-                  !sel && !disabled && !todayDay && 'hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
-                  disabled && 'text-[var(--muted-foreground)]/40 cursor-not-allowed'
-                )}
+                aria-label="Mês anterior"
+                onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
+                className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
               >
-                {format(day, 'd')}
+                <ChevronLeft className="h-4 w-4" />
               </button>
-            )
-          })}
-        </div>
-      </div>
+              <span className="font-semibold text-sm capitalize">
+                {format(currentMonth, "MMMM 'de' yyyy", { locale: ptBR })}
+              </span>
+              <button
+                aria-label="Próximo mês"
+                onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
+                className="min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-[var(--primary)]/10 transition-colors"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
 
-      <Button
-        className="w-full h-12"
-        disabled={!selected}
-        onClick={() => selected && onSelect(selected)}
-      >
-        Continuar
-      </Button>
+            <div className="grid grid-cols-7 mb-2">
+              {weekDays.map(d => (
+                <div key={d} className="text-center text-xs text-[var(--muted-foreground)] font-medium py-1">{d}</div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-7 gap-0.5">
+              {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                <div key={`empty-${i}`} />
+              ))}
+              {days.map(day => {
+                const disabled = isDisabled(day)
+                const sel = selected && isSameDay(day, selected)
+                const todayDay = isToday(day)
+                return (
+                  <button
+                    key={day.toISOString()}
+                    aria-label={format(day, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                    aria-pressed={!!sel}
+                    disabled={disabled}
+                    onClick={() => setSelected(day)}
+                    className={cn(
+                      'aspect-square flex items-center justify-center text-sm rounded-lg transition-all',
+                      sel && 'bg-[var(--primary)] text-black font-bold',
+                      !sel && todayDay && 'border border-[var(--primary)]/50 text-[var(--primary)]',
+                      !sel && !disabled && !todayDay && 'hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
+                      disabled && 'text-[var(--muted-foreground)]/40 cursor-not-allowed'
+                    )}
+                  >
+                    {format(day, 'd')}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <Button
+            className="w-full h-12"
+            disabled={!selected}
+            onClick={() => selected && onSelect(selected)}
+          >
+            Continuar
+          </Button>
+        </>
+      )}
     </div>
   )
 }
 
+/** Motivos que o backend devolve quando não há horários. */
+const EMPTY_REASON: Record<string, string> = {
+  CLOSED: 'A barbearia está fechada nesta data.',
+  PAST_DATE: 'Essa data já passou.',
+  TOO_FAR: 'Ainda não é possível agendar tão longe.',
+  FULLY_BOOKED: 'Todos os horários deste dia já foram reservados.',
+}
+
 function TimeStep({
   date,
+  service,
   onSelect,
-  onBack
+  onBack,
 }: {
   date: Date
-  onSelect: (t: string) => void
+  service: Service
+  onSelect: (slot: AvailableSlot) => void
   onBack: () => void
 }) {
   const [selected, setSelected] = useState<string | null>(null)
-  const dateKey = format(date, 'yyyy-MM-dd')
-  const occupied = OCCUPIED_TIMES_BY_DATE[dateKey] || []
+  const [slots, setSlots] = useState<AvailableSlot[] | null>(null)
+  const [reason, setReason] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const dateISO = format(date, 'yyyy-MM-dd')
+
+  const load = useCallback(async () => {
+    setError(null)
+    setSlots(null)
+    try {
+      const availability = await getAvailability(dateISO, service.id)
+      setSlots(availability.slots)
+      setReason(availability.reason)
+    } catch (err) {
+      setError(describeError(err, 'Não foi possível carregar os horários.'))
+    }
+  }, [dateISO, service.id])
+
+  useEffect(() => { void load() }, [load])
 
   return (
     <div>
@@ -258,38 +380,55 @@ function TimeStep({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mb-6">
-        {AVAILABLE_TIMES.map(time => {
-          const isOccupied = occupied.includes(time)
-          const isSelected = selected === time
-          return (
-            <button
-              key={time}
-              aria-pressed={isSelected}
-              aria-label={`${time}${isOccupied ? ' indisponível' : ''}`}
-              disabled={isOccupied}
-              onClick={() => setSelected(time)}
-              className={cn(
-                'py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
-                isSelected && 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]',
-                !isSelected && !isOccupied && 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
-                // Unavailable stays neutral and flat, so it reads as a different material from the bronze slots.
-                isOccupied && 'border-[var(--border)]/40 bg-[var(--secondary)]/40 text-[var(--muted-foreground)]/45 cursor-not-allowed line-through font-normal'
-              )}
-            >
-              {time}
-            </button>
-          )
-        })}
-      </div>
+      {error ? (
+        <ErrorState message={error} onRetry={() => void load()} />
+      ) : slots === null ? (
+        <LoadingState label="Buscando horários livres…" />
+      ) : slots.length === 0 ? (
+        <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-2xl p-8 text-center">
+          <Clock className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
+          <p className="text-sm text-[var(--muted-foreground)] mb-4">
+            {(reason && EMPTY_REASON[reason]) ?? 'Nenhum horário disponível nesta data.'}
+          </p>
+          <Button variant="outline" size="sm" onClick={onBack}>
+            Escolher outra data
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mb-6">
+            {slots.map(slot => {
+              const isSelected = selected === slot.startsAtClock
+              return (
+                <button
+                  key={slot.startsAtClock}
+                  aria-pressed={isSelected}
+                  onClick={() => setSelected(slot.startsAtClock)}
+                  className={cn(
+                    'py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
+                    isSelected
+                      ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
+                      : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]'
+                  )}
+                >
+                  {slot.startsAtClock}
+                </button>
+              )
+            })}
+          </div>
 
-      <Button
-        className="w-full h-12"
-        disabled={!selected}
-        onClick={() => selected && onSelect(selected)}
-      >
-        Continuar
-      </Button>
+          <Button
+            className="w-full h-12"
+            disabled={!selected}
+            onClick={() => {
+              const slot = slots.find(entry => entry.startsAtClock === selected)
+              if (slot) onSelect(slot)
+            }}
+          >
+            Continuar
+          </Button>
+        </>
+      )}
     </div>
   )
 }
@@ -297,18 +436,24 @@ function TimeStep({
 function ConfirmStep({
   service,
   date,
-  time,
+  slot,
   onConfirm,
   onBack,
-  loading
+  loading,
+  error,
+  authStatus,
 }: {
   service: Service
   date: Date
-  time: string
+  slot: AvailableSlot
   onConfirm: () => void
   onBack: () => void
   loading: boolean
+  error: string | null
+  authStatus: AuthStatus
 }) {
+  const needsAccount = authStatus === 'unauthenticated' || authStatus === 'error'
+  const awaitingApproval = authStatus === 'pendingApproval'
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
@@ -332,9 +477,9 @@ function ConfirmStep({
           {[
             { label: 'Serviço', value: service.name },
             { label: 'Data', value: format(date, "dd 'de' MMMM", { locale: ptBR }) },
-            { label: 'Horário', value: time },
-            { label: 'Duração', value: `${service.duration} minutos` },
-            { label: 'Valor', value: `R$ ${service.price}`, highlight: true },
+            { label: 'Horário', value: `${slot.startsAtClock} – ${slot.endsAtClock}` },
+            { label: 'Duração', value: `${service.durationMinutes} minutos` },
+            { label: 'Valor', value: `R$ ${service.priceFormatted}`, highlight: true },
           ].map(({ label, value, highlight }) => (
             <div key={label} className="flex items-center justify-between">
               <span className="text-sm text-[var(--muted-foreground)]">{label}</span>
@@ -346,33 +491,59 @@ function ConfirmStep({
         </div>
       </div>
 
-      <p id="booking-simulation-notice" className="text-sm text-[var(--muted-foreground)] mb-4">
-        Este agendamento é uma simulação. Nenhuma reserva será criada ou salva.
-      </p>
+      {error && (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+        >
+          {error}
+        </p>
+      )}
 
-      <Button aria-describedby="booking-simulation-notice" className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
-        {loading ? 'Simulando...' : 'Confirmar simulação'}
+      {needsAccount && (
+        <p className="mb-4 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/8 px-3 py-2.5 text-sm text-[var(--foreground)]">
+          Falta só identificar você. Sua escolha fica guardada — confirmamos a
+          disponibilidade logo depois.
+        </p>
+      )}
+
+      {awaitingApproval && (
+        <p className="mb-4 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/8 px-3 py-2.5 text-sm text-[var(--foreground)]">
+          Seu cadastro está em análise. A barbearia precisa aprovar seu acesso
+          antes do primeiro agendamento — guardamos sua escolha até lá.
+        </p>
+      )}
+
+      <Button className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
+        {loading
+          ? 'Confirmando...'
+          : needsAccount
+            ? 'Entrar e confirmar'
+            : awaitingApproval
+              ? 'Ver situação do cadastro'
+              : 'Confirmar agendamento'}
       </Button>
     </div>
   )
 }
 
-function SuccessStep({ service, date, time, onRestart }: { service: Service; date: Date; time: string; onRestart: () => void }) {
+function SuccessStep({ appointment, onRestart }: { appointment: Appointment; onRestart: () => void }) {
   const navigate = useNavigate()
+  const [year, month, day] = appointment.date.split('-')
+
   return (
     <div className="text-center py-6">
       <div className="w-20 h-20 rounded-full bg-[var(--primary)]/15 border-2 border-[var(--primary)]/40 flex items-center justify-center mx-auto mb-6">
         <Check className="h-10 w-10 text-[var(--primary)]" />
       </div>
-      <h2 className="font-display text-2xl font-bold tracking-tight mb-2">Simulação concluída!</h2>
+      <h2 className="font-display text-2xl font-bold tracking-tight mb-2">Agendamento confirmado!</h2>
       <p className="text-[var(--muted-foreground)] text-sm mb-8">
-        Você simulou{' '}
-        <span className="text-[var(--foreground)] font-medium">{service.name}</span>{' '}
-        no dia <span className="text-[var(--foreground)] font-medium">{format(date, "dd/MM", { locale: ptBR })}</span>{' '}
-        às <span className="text-[var(--foreground)] font-medium">{time}</span>.
+        <span className="text-[var(--foreground)] font-medium">{appointment.serviceName}</span>{' '}
+        no dia{' '}
+        <span className="text-[var(--foreground)] font-medium">{day}/{month}/{year}</span>{' '}
+        às <span className="text-[var(--foreground)] font-medium">{appointment.startsAtClock}</span>.
       </p>
 
-      <p role="status" className="text-sm text-[var(--muted-foreground)] mb-6">Nenhuma reserva foi criada. Os horários são exemplos, sem garantia de disponibilidade.</p>
       <div className="border border-[var(--primary)]/30 bg-[var(--primary)]/5 rounded-xl p-4 mb-8 text-left">
         <p className="text-xs text-[var(--muted-foreground)] mb-1">Lembrete</p>
         <p className="text-sm text-[var(--foreground)]">Chegue com 5 minutos de antecedência. Em caso de imprevisto, cancele com pelo menos 2 horas de antecedência.</p>
@@ -394,44 +565,188 @@ function SuccessStep({ service, date, time, onRestart }: { service: Service; dat
 }
 
 export default function Schedule() {
+  const navigate = useNavigate()
+  const { status } = useAuth()
   const [step, setStep] = useState<Step>('service')
   const [service, setService] = useState<Service | null>(null)
   const [date, setDate] = useState<Date | null>(null)
-  const [time, setTime] = useState<string | null>(null)
+  const [slot, setSlot] = useState<AvailableSlot | null>(null)
+  const [created, setCreated] = useState<Appointment | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const restored = useRef(false)
 
+  /**
+   * Retorno do login/cadastro: reconstrói a seleção que a pessoa já tinha
+   * feito, em vez de mandá-la começar do zero.
+   *
+   * Reconstruir é só a parte visual. A confirmação continua passando pelo
+   * backend, que revalida serviço, expediente, antecedência e — sobretudo —
+   * se o horário ainda está livre. A EXCLUDE constraint no banco garante que
+   * duas pessoas não fiquem com o mesmo horário, então uma intenção guardada
+   * nunca vira reserva indevida.
+   */
+  useEffect(() => {
+    if (restored.current || status === 'loading') return
+    const intent = readBookingIntent()
+    if (!intent) return
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const services = await listServices()
+        const chosen = services.find(entry => entry.id === intent.serviceId)
+        if (cancelled) return
+        if (!chosen) { restored.current = true; return clearBookingIntent() }
+
+        const [year, month, day] = intent.date.split('-').map(Number)
+        const chosenDate = new Date(year!, month! - 1, day!)
+
+        // Revalidação real: o horário guardado só volta se ainda existir.
+        const availability = await getAvailability(intent.date, chosen.id)
+        const stillFree = availability.slots.find(
+          entry => entry.startsAtClock === intent.startsAt,
+        )
+        if (cancelled) return
+
+        restored.current = true
+        setService(chosen)
+        setDate(chosenDate)
+        if (stillFree) {
+          setSlot(stillFree)
+          setStep('confirm')
+        } else {
+          setSlot(null)
+          setStep('time')
+          setNotice(
+            'O horário que você tinha escolhido não está mais livre. Escolha outro.',
+          )
+        }
+      } catch {
+        if (!cancelled) setNotice('Não foi possível recuperar sua seleção. Recarregue para tentar novamente.')
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [status])
+
+  /**
+   * Sem atualização otimista: o agendamento só aparece como confirmado depois
+   * que o backend cria. Entre listar e reservar, o horário pode ter sido
+   * tomado por outra pessoa — e nesse caso voltamos para a escolha de horário.
+   */
   async function handleConfirm() {
+    if (!service || !date || !slot) return
+
+    const dateISO = format(date, 'yyyy-MM-dd')
+    const intent = {
+      serviceId: service.id,
+      date: dateISO,
+      startsAt: slot.startsAtClock,
+    }
+
+    // Ainda sem sessão: guarda a seleção e manda autenticar.
+    if (status === 'unauthenticated' || status === 'error') {
+      saveBookingIntent(intent)
+      return navigate('/login?next=%2Fagendar')
+    }
+
+    // Cadastro em análise: a política da barbearia exige aprovação antes do
+    // primeiro agendamento, e ela vale no backend. Dizemos isso aqui em vez
+    // de deixar o usuário bater num 403.
+    if (status === 'pendingApproval') {
+      saveBookingIntent(intent)
+      return navigate('/conta/pendente')
+    }
+
+    if (status === 'blocked') return navigate('/conta/bloqueada')
+
     setLoading(true)
-    await new Promise(r => setTimeout(r, 1000))
-    setLoading(false)
-    setStep('success')
+    setError(null)
+    try {
+      const appointment = await createAppointment(intent)
+      clearBookingIntent()
+      setCreated(appointment)
+      setStep('success')
+    } catch (err) {
+      setError(describeError(err, 'Não foi possível confirmar o agendamento.'))
+      // Conflito: alguém reservou antes. Volta para a lista já atualizada.
+      if (err instanceof ApiError && err.status === 409) {
+        setSlot(null)
+        setStep('time')
+      }
+      // A conta deixou de estar apta entre abrir a tela e confirmar.
+      if (err instanceof ApiError && err.code === 'ACCOUNT_PENDING') {
+        saveBookingIntent(intent)
+        navigate('/conta/pendente')
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
-  if (step === 'success' && service && date && time) {
-    return <SuccessStep service={service} date={date} time={time} onRestart={() => { setService(null); setDate(null); setTime(null); setStep('service') }} />
+  function restart() {
+    clearBookingIntent()
+    setService(null)
+    setDate(null)
+    setSlot(null)
+    setCreated(null)
+    setError(null)
+    setNotice(null)
+    setStep('service')
+  }
+
+  if (step === 'success' && created) {
+    return <SuccessStep appointment={created} onRestart={restart} />
   }
 
   return (
     <div>
       {step !== 'success' && <StepProgress current={step} />}
 
+      {notice && (
+        <p
+          role="status"
+          className="mb-4 rounded-lg border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-3 py-2 text-sm text-[var(--primary-light)]"
+        >
+          {notice}
+        </p>
+      )}
+
+      {step === 'time' && error && (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+        >
+          {error}
+        </p>
+      )}
+
       {step === 'service' && (
-        <ServiceStep onSelect={s => { setService(s); setStep('date') }} />
+        <ServiceStep onSelect={s => { setService(s); setNotice(null); setStep('date') }} />
       )}
       {step === 'date' && (
         <DateStep onSelect={d => { setDate(d); setStep('time') }} onBack={() => setStep('service')} />
       )}
-      {step === 'time' && date && (
-        <TimeStep date={date} onSelect={t => { setTime(t); setStep('confirm') }} onBack={() => setStep('date')} />
+      {step === 'time' && date && service && (
+        <TimeStep
+          date={date}
+          service={service}
+          onSelect={s => { setSlot(s); setError(null); setNotice(null); setStep('confirm') }}
+          onBack={() => setStep('date')}
+        />
       )}
-      {step === 'confirm' && service && date && time && (
+      {step === 'confirm' && service && date && slot && (
         <ConfirmStep
           service={service}
           date={date}
-          time={time}
+          slot={slot}
           onConfirm={handleConfirm}
           onBack={() => setStep('time')}
           loading={loading}
+          error={error}
+          authStatus={status}
         />
       )}
     </div>

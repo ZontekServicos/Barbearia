@@ -1,62 +1,119 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Phone, User, Scissors, Clock, Calendar, DollarSign, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
+import {
+  ArrowLeft, Phone, User, Scissors, Clock, Calendar, DollarSign,
+  CheckCircle, XCircle, AlertCircle, RefreshCw,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
-import { APPOINTMENTS } from '@/data/mock'
-import type { AppointmentStatus } from '@/data/mock'
+import { ApiError } from '@/services/api'
+import {
+  getAdminAppointment,
+  updateAppointmentStatus,
+  type AdminAppointment,
+} from '@/services/admin-booking'
 
-function formatDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
-  const months = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
-  return `${d} de ${months[parseInt(m) - 1]} de ${y}`
+const MONTHS = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+]
+
+function formatDate(dateISO: string) {
+  const [year, month, day] = dateISO.split('-')
+  return `${day} de ${MONTHS[Number(month) - 1]} de ${year}`
 }
 
 export default function AppointmentDetail() {
   const { id } = useParams<{ id: string }>()
-  return <AppointmentDetailContent key={id} />
-}
-
-function AppointmentDetailContent() {
-  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const apt = APPOINTMENTS.find(a => a.id === id)
-
-  const [status, setStatus] = useState<AppointmentStatus>(apt?.status ?? 'confirmed')
-  const [loading, setLoading] = useState<string | null>(null)
+  const [appointment, setAppointment] = useState<AdminAppointment | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [pending, setPending] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
-  if (!apt) {
+  const load = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    setError(null)
+    try {
+      setAppointment(await getAdminAppointment(id))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Não foi possível carregar o agendamento.')
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => { void load() }, [load])
+
+  /** Sem atualização otimista: o status só muda na tela depois do backend confirmar. */
+  async function handleAction(status: 'COMPLETED' | 'CANCELLED' | 'NO_SHOW', label: string) {
+    if (!id) return
+    setPending(label)
+    setActionError(null)
+    try {
+      setAppointment(await updateAppointmentStatus(id, status))
+      setToast(`${label} com sucesso.`)
+      setTimeout(() => setToast(null), 3000)
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Não foi possível atualizar.')
+    } finally {
+      setPending(null)
+    }
+  }
+
+  if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <p className="text-[var(--muted-foreground)] mb-4">Agendamento não encontrado.</p>
-        <Button onClick={() => navigate('/admin/agenda')}>Voltar à agenda</Button>
+      <p role="status" className="text-sm text-[var(--muted-foreground)] py-10">
+        Carregando agendamento…
+      </p>
+    )
+  }
+
+  if (error || !appointment) {
+    return (
+      <div className="max-w-xl">
+        <div role="alert" className="border border-red-500/40 bg-red-500/10 rounded-2xl p-6 text-center">
+          <AlertCircle className="h-8 w-8 text-red-400 mx-auto mb-3" />
+          <p className="text-sm text-red-200 mb-4">{error ?? 'Agendamento não encontrado.'}</p>
+          <div className="flex flex-col sm:flex-row gap-2 justify-center">
+            <Button variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              Tentar novamente
+            </Button>
+            <Button size="sm" onClick={() => navigate('/admin/agenda')}>Voltar à agenda</Button>
+          </div>
+        </div>
       </div>
     )
   }
 
-  async function handleAction(newStatus: AppointmentStatus, label: string) {
-    setLoading(label)
-    await new Promise(r => setTimeout(r, 700))
-    setStatus(newStatus)
-    setLoading(null)
-    setToast(`${label} com sucesso.`)
-    setTimeout(() => setToast(null), 3000)
-  }
+  const details = [
+    { icon: User, label: 'Cliente', value: appointment.customer.fullName ?? 'Sem nome' },
+    { icon: Phone, label: 'Telefone', value: appointment.customer.phoneFormatted },
+    { icon: Scissors, label: 'Serviço', value: appointment.serviceName },
+    { icon: Calendar, label: 'Data', value: formatDate(appointment.date) },
+    {
+      icon: Clock,
+      label: 'Horário',
+      value: `${appointment.startsAtClock} – ${appointment.endsAtClock} · ${appointment.durationMinutes} min`,
+    },
+    { icon: DollarSign, label: 'Valor', value: `R$ ${appointment.servicePriceFormatted}` },
+  ]
 
   return (
     <div className="max-w-xl">
-      {/* Toast */}
       {toast && (
         <div role="status" className="fixed top-4 right-4 left-4 sm:left-auto z-50 bg-[var(--card)] border border-green-500/50 text-green-400 px-4 py-3 rounded-xl text-sm shadow-xl">
           {toast}
         </div>
       )}
 
-      {/* Back */}
       <button
         onClick={() => navigate('/admin/agenda')}
-        className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-6"
+        className="flex items-center gap-1.5 min-h-11 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-6"
       >
         <ArrowLeft className="h-4 w-4" />
         Voltar à agenda
@@ -64,25 +121,17 @@ function AppointmentDetailContent() {
 
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold tracking-tight">Agendamento</h2>
-        <StatusBadge status={status} />
+        <StatusBadge status={appointment.status} />
       </div>
 
-      {/* Details card */}
-      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
-        <div className="p-5 border-b border-[var(--border)] bg-[var(--primary)]/5">
+      <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl overflow-hidden mb-6">
+        <div className="p-5 border-b border-[var(--primary)]/20 bg-[var(--primary)]/8">
           <p className="text-xs text-[var(--primary)] font-semibold tracking-widest uppercase">Detalhes</p>
         </div>
         <div className="p-5 space-y-4">
-          {[
-            { icon: User, label: 'Cliente', value: apt.clientName },
-            { icon: Phone, label: 'Telefone', value: apt.clientPhone },
-            { icon: Scissors, label: 'Serviço', value: apt.serviceName },
-            { icon: Calendar, label: 'Data', value: formatDate(apt.date) },
-            { icon: Clock, label: 'Horário', value: `${apt.time} · ${apt.serviceDuration} min` },
-            { icon: DollarSign, label: 'Valor', value: `R$ ${apt.servicePrice}` },
-          ].map(({ icon: Icon, label, value }) => (
+          {details.map(({ icon: Icon, label, value }) => (
             <div key={label} className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[var(--secondary)] flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center shrink-0">
                 <Icon className="h-4 w-4 text-[var(--primary)]" />
               </div>
               <div>
@@ -91,60 +140,63 @@ function AppointmentDetailContent() {
               </div>
             </div>
           ))}
-          {apt.notes && (
-            <div className="pt-3 border-t border-[var(--border)]">
+          {appointment.notes && (
+            <div className="pt-3 border-t border-[var(--primary)]/20">
               <p className="text-xs text-[var(--muted-foreground)] mb-1">Observações</p>
-              <p className="text-sm text-[var(--foreground)]">{apt.notes}</p>
+              <p className="text-sm text-[var(--foreground)]">{appointment.notes}</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-2">
+      <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-2">
         <p className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Ações</p>
 
-        {status === 'confirmed' && (
+        {actionError && (
+          <p role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300 mb-2">
+            {actionError}
+          </p>
+        )}
+
+        {appointment.status === 'CONFIRMED' ? (
           <>
             <Button
               className="w-full h-11"
-              onClick={() => handleAction('completed', 'Atendimento concluído')}
-              disabled={!!loading}
+              onClick={() => void handleAction('COMPLETED', 'Atendimento concluído')}
+              disabled={pending !== null}
             >
               <CheckCircle className="h-4 w-4 mr-2" />
-              {loading === 'Atendimento concluído' ? 'Processando...' : 'Concluir atendimento'}
+              {pending === 'Atendimento concluído' ? 'Processando...' : 'Concluir atendimento'}
             </Button>
             <Button
               variant="outline"
               className="w-full h-11"
-              onClick={() => handleAction('missed', 'Marcado como falta')}
-              disabled={!!loading}
+              onClick={() => void handleAction('NO_SHOW', 'Marcado como falta')}
+              disabled={pending !== null}
             >
               <AlertCircle className="h-4 w-4 mr-2" />
-              {loading === 'Marcado como falta' ? 'Processando...' : 'Marcar como falta'}
+              {pending === 'Marcado como falta' ? 'Processando...' : 'Marcar como falta'}
             </Button>
             <Button
               variant="destructive"
               className="w-full h-11"
-              onClick={() => handleAction('cancelled', 'Agendamento cancelado')}
-              disabled={!!loading}
+              onClick={() => void handleAction('CANCELLED', 'Agendamento cancelado')}
+              disabled={pending !== null}
             >
               <XCircle className="h-4 w-4 mr-2" />
-              {loading === 'Agendamento cancelado' ? 'Processando...' : 'Cancelar agendamento'}
+              {pending === 'Agendamento cancelado' ? 'Processando...' : 'Cancelar agendamento'}
             </Button>
           </>
-        )}
-
-        {status !== 'confirmed' && (
+        ) : (
           <div className="text-center py-4">
             <p className="text-sm text-[var(--muted-foreground)]">Este agendamento já foi encerrado.</p>
           </div>
         )}
 
-        <div className="pt-2 border-t border-[var(--border)]">
+        <div className="pt-2 border-t border-[var(--primary)]/20">
           <Link
-            to={`/admin/clients/${apt.clientId}`}
-            className="flex items-center justify-center gap-2 py-2.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+            to={`/admin/clients/${appointment.customer.id}`}
+            className="flex items-center justify-center gap-2 min-h-11 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
           >
             <User className="h-4 w-4" />
             Ver perfil do cliente

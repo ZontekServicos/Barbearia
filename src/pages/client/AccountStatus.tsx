@@ -3,6 +3,7 @@ import { Clock, ShieldAlert, RefreshCw, LogOut } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/context/AuthContext"
+import { readBookingIntent } from "@/services/booking-intent"
 
 function StatusShell({
   icon,
@@ -61,6 +62,8 @@ function StatusShell({
 export function PendingApproval() {
   const { user, status, error, refreshUser, signOut } = useAuth()
   const [checking, setChecking] = useState(false)
+  // Lido uma vez: a seleção guardada não deve piscar durante o refresh.
+  const [pendingBooking] = useState(() => readBookingIntent())
 
   async function handleCheck() {
     setChecking(true)
@@ -71,9 +74,20 @@ export function PendingApproval() {
     }
   }
 
+  // Aprovado enquanto esperava: volta direto para o agendamento que ficou
+  // pela metade, em vez de despejar a pessoa na home.
   if (status === "authenticated")
     return (
-      <Navigate to={user?.role === "ADMIN" ? "/admin" : "/client"} replace />
+      <Navigate
+        to={
+          user?.role === "ADMIN"
+            ? "/admin"
+            : pendingBooking
+              ? "/agendar"
+              : "/client"
+        }
+        replace
+      />
     )
 
   return (
@@ -89,6 +103,13 @@ export function PendingApproval() {
       <p className="text-sm text-[var(--muted-foreground)] mb-6">
         Assim que for liberado, é só voltar aqui e agendar normalmente.
       </p>
+
+      {pendingBooking && (
+        <p className="mb-6 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/8 px-3 py-2.5 text-sm text-left text-[var(--foreground)]">
+          Guardamos o horário que você escolheu. Ele ainda não está reservado —
+          confirmamos a disponibilidade assim que seu acesso for liberado.
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="text-sm text-red-400 mb-3">

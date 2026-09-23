@@ -43,46 +43,22 @@ const envSchema = z
       .max(365)
       .default(30),
 
-    OTP_TTL_MINUTES: z.coerce.number().int().positive().max(30).default(5),
-    OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().max(10).default(5),
-    AUTH_OTP_DEV_MODE: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((value) => value === "true"),
-
-    SMS_PROVIDER: z.enum(["console", "twilio"]).default("console"),
-
-    // Credenciais da Twilio. Nomes explícitos do provedor em vez de genéricos:
-    // um Account SID não é uma "API key" — a Twilio tem os dois conceitos, e
-    // guardar um no nome do outro convida a erro de configuração em produção.
-    TWILIO_ACCOUNT_SID: z.preprocess(
-      (v) => (v === "" ? undefined : v),
-      z.string().trim().optional(),
-    ),
-    TWILIO_AUTH_TOKEN: z.preprocess(
-      (v) => (v === "" ? undefined : v),
-      z.string().trim().optional(),
-    ),
-    TWILIO_FROM_NUMBER: z.preprocess(
-      (v) => (v === "" ? undefined : v),
-      z.string().trim().optional(),
-    ),
-    TWILIO_MESSAGING_SERVICE_SID: z.preprocess(
-      (v) => (v === "" ? undefined : v),
-      z.string().trim().optional(),
-    ),
-    TWILIO_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .min(1000)
-      .max(30000)
-      .default(10000),
-
     BOOTSTRAP_ADMIN_PHONE: z.string().optional(),
     BOOTSTRAP_ADMIN_NAME: z.preprocess(
       (v) => (v === "" ? undefined : v),
       z.string().trim().min(2).max(120).optional(),
     ),
+    /** Senha do primeiro admin. Fornecida pelo operador, nunca versionada. */
+    BOOTSTRAP_ADMIN_PASSWORD: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().max(512).transform((v) => v.normalize("NFKC"))
+        .refine((v) => Array.from(v).length >= 15 && Array.from(v).length <= 128, "Use de 15 a 128 caracteres.").optional(),
+    ),
+    /** Intenção explícita de substituir a senha de um admin existente. */
+    BOOTSTRAP_ADMIN_RESET_PASSWORD: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
     BOOTSTRAP_ADMIN_ALLOW_PROMOTION: z
       .enum(["true", "false"])
       .default("false")
@@ -135,88 +111,6 @@ const envSchema = z
         }
       }
 
-    // Trava de segurança: o modo de OTP em desenvolvimento expõe o código no log.
-    // Ele jamais pode subir junto com NODE_ENV=production.
-    if (env.NODE_ENV === "production" && env.AUTH_OTP_DEV_MODE) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["AUTH_OTP_DEV_MODE"],
-        message: "AUTH_OTP_DEV_MODE não pode ser habilitado em produção",
-      })
-    }
-
-    if (env.NODE_ENV === "production" && env.SMS_PROVIDER === "console") {
-      ctx.addIssue({
-        code: "custom",
-        path: ["SMS_PROVIDER"],
-        message:
-          "Em produção configure um provider real de SMS (SMS_PROVIDER=twilio)",
-      })
-    }
-
-    // Formatos validados mesmo fora do provider ativo: se a variável está
-    // presente mas errada, é erro de configuração — falhar no boot é melhor
-    // que descobrir na primeira tentativa de login.
-    if (
-      env.TWILIO_ACCOUNT_SID &&
-      !/^AC[0-9a-fA-F]{32}$/.test(env.TWILIO_ACCOUNT_SID)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TWILIO_ACCOUNT_SID"],
-        message: "TWILIO_ACCOUNT_SID deve ser o Account SID no formato AC + 32 hexadecimais",
-      })
-    }
-    if (
-      env.TWILIO_MESSAGING_SERVICE_SID &&
-      !/^MG[0-9a-fA-F]{32}$/.test(env.TWILIO_MESSAGING_SERVICE_SID)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TWILIO_MESSAGING_SERVICE_SID"],
-        message:
-          "TWILIO_MESSAGING_SERVICE_SID deve estar no formato MG + 32 hexadecimais",
-      })
-    }
-    if (
-      env.TWILIO_FROM_NUMBER &&
-      !/^\+[1-9]\d{6,14}$/.test(env.TWILIO_FROM_NUMBER)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TWILIO_FROM_NUMBER"],
-        message: "TWILIO_FROM_NUMBER deve estar em E.164, ex.: +15005550006",
-      })
-    }
-
-    if (env.SMS_PROVIDER === "twilio") {
-      if (!env.TWILIO_ACCOUNT_SID) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["TWILIO_ACCOUNT_SID"],
-          message: "TWILIO_ACCOUNT_SID é obrigatória quando SMS_PROVIDER=twilio",
-        })
-      }
-      if (!env.TWILIO_AUTH_TOKEN || env.TWILIO_AUTH_TOKEN.length < 32) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["TWILIO_AUTH_TOKEN"],
-          message:
-            "TWILIO_AUTH_TOKEN é obrigatória quando SMS_PROVIDER=twilio (32 caracteres)",
-        })
-      }
-      // A Twilio aceita remetente por número OU por Messaging Service.
-      // Exigir os dois impediria integrações legítimas; exigir nenhum deixaria
-      // subir um servidor incapaz de enviar. Exatamente um basta.
-      if (!env.TWILIO_FROM_NUMBER && !env.TWILIO_MESSAGING_SERVICE_SID) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["TWILIO_FROM_NUMBER"],
-          message:
-            "Configure TWILIO_MESSAGING_SERVICE_SID ou TWILIO_FROM_NUMBER quando SMS_PROVIDER=twilio",
-        })
-      }
-    }
   })
 
 export type Env = z.infer<typeof envSchema>

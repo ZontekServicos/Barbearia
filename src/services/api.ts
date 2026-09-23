@@ -27,6 +27,7 @@ let accessToken: string | null = null
 let generation = 0
 let loggingOut = false
 let refreshFlight: Promise<boolean> | null = null
+let authenticationFlight: Promise<{ accessToken: string }> | null = null
 let onSessionLost: ((reason?: string) => void) | null = null
 export function setAccessToken(token: string | null): void {
   generation++
@@ -43,7 +44,7 @@ function loseSession(reason?: string) {
   onSessionLost?.(reason)
 }
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE"
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   body?: unknown
   skipRefresh?: boolean
 }
@@ -117,11 +118,31 @@ export async function refreshSession(): Promise<boolean> {
     refreshFlight = null
   }
 }
+/** Orders credential responses before logout so a late Set-Cookie cannot restore a session. */
+export async function authenticate<T extends { accessToken: string }>(path: string, body: unknown): Promise<T> {
+  if (loggingOut || authenticationFlight) throw new ApiError(409, { code: "AUTH_IN_PROGRESS", message: "Aguarde a autenticação em andamento." })
+  setAccessToken(null)
+  const startedAt = generation
+  const cancelled = () => new ApiError(401, { code: "SESSION_CANCELLED", message: "Autenticação cancelada. Entre novamente." })
+  const pending = (async () => {
+    // An older refresh cookie must arrive before the new login cookie.
+    await refreshFlight?.catch(() => false)
+    if (loggingOut || generation !== startedAt) throw cancelled()
+    const data = await apiRequest<T>(path, { method: "POST", skipRefresh: true, body })
+    if (loggingOut || generation !== startedAt) throw cancelled()
+    if (typeof data.accessToken !== "string") throw new ApiError(502, { code: "NETWORK_ERROR", message: "Resposta inválida do servidor." })
+    setAccessToken(data.accessToken)
+    return data
+  })()
+  authenticationFlight = pending
+  try { return await pending } finally { if (authenticationFlight === pending) authenticationFlight = null }
+}
+
 export async function beginLogout(): Promise<void> {
   loggingOut = true
   setAccessToken(null)
   // Aguarda o Set-Cookie da rotação já iniciada antes de revogar e apagar o cookie.
-  await refreshFlight?.catch(() => false)
+  await Promise.allSettled([refreshFlight, authenticationFlight])
 }
 export function finishLogout(): void {
   accessToken = null

@@ -4,6 +4,7 @@ import { logger } from "../../utils/logger.js"
 import { lockKey, lockUser } from "../../utils/locks.js"
 import { toPublicUser, type PublicUser } from "../users/users.mapper.js"
 import type { UserRole, UserStatus } from "../../generated/prisma/enums.js"
+import { hashPassword } from "../auth/password.service.js"
 
 export interface ListUsersFilters {
   status?: UserStatus
@@ -168,4 +169,87 @@ export async function listAuditLog(limit = 50) {
       ? { id: entry.targetUser.id, fullName: entry.targetUser.fullName }
       : null,
   }))
+}
+
+/**
+ * Redefinição de senha assistida pelo administrador.
+ *
+ * Sem SMS e sem e-mail, não existe canal automático capaz de provar posse do
+ * telefone. A única recuperação honesta é presencial: o cliente se identifica
+ * no balcão, o administrador gera uma senha temporária e a entrega em mãos.
+ *
+ * Garantias:
+ *  - a senha original nunca é revelada — ela não existe em texto puro em
+ *    lugar nenhum, só o hash Argon2id;
+ *  - a nova senha é recebida do operador por HTTPS e nunca devolvida
+ *    na resposta nem registrada em log;
+ *  - a ação fica na trilha de auditoria com ator, alvo e data;
+ *  - todas as sessões do alvo são encerradas.
+ *
+ * É também o caminho das contas herdadas do fluxo OTP, que nasceram sem senha
+ * e por isso não conseguem entrar nem podem ser reivindicadas pelo cadastro.
+ */
+export async function resetUserPassword(
+  actorId: string,
+  targetUserId: string,
+  newPassword: string,
+): Promise<{ user: PublicUser }> {
+  if (actorId === targetUserId) {
+    // Um admin troca a própria senha pelo fluxo autenticado normal, provando
+    // que sabe a senha atual. Passar por aqui contornaria essa checagem.
+    throw AppError.badRequest(
+      ErrorCodes.FORBIDDEN,
+      "Use a troca de senha autenticada para a sua própria conta.",
+    )
+  }
+
+  const passwordHash = await hashPassword(newPassword)
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockKey(tx, "admin-status")
+    for (const id of [actorId, targetUserId].sort()) await lockUser(tx, id)
+
+    // O ator é revalidado dentro da transação: um admin rebaixado no meio do
+    // caminho não conclui a operação.
+    const actor = await tx.user.findUnique({ where: { id: actorId } })
+    if (actor?.role !== "ADMIN" || actor.status !== "ACTIVE")
+      throw AppError.forbidden()
+
+    const target = await tx.user.findUnique({ where: { id: targetUserId } })
+    if (!target)
+      throw AppError.notFound(
+        ErrorCodes.USER_NOT_FOUND,
+        "Usuário não encontrado.",
+      )
+
+    const user = await tx.user.update({
+      where: { id: targetUserId },
+      data: {
+        passwordHash,
+        passwordUpdatedAt: new Date(),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+    })
+
+    await tx.adminAuditLog.create({
+      data: {
+        actorId,
+        targetUserId,
+        action: "USER_PASSWORD_RESET",
+        // Registra o fato, jamais a senha ou o hash.
+        metadata: { hadPassword: target.passwordHash !== null },
+      },
+    })
+
+    await tx.refreshToken.updateMany({
+      where: { userId: targetUserId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    })
+
+    return user
+  })
+
+  logger.info("Senha redefinida pelo administrador", { actorId, targetUserId })
+  return { user: toPublicUser(updated) }
 }

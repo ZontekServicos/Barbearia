@@ -4,13 +4,13 @@ import { AppError, ErrorCodes } from "../../utils/errors.js"
 import { sendSuccess } from "../../utils/http.js"
 import { toPublicUser } from "../users/users.mapper.js"
 import { prisma } from "../../config/prisma.js"
-import { requestOtp, verifyOtp } from "./auth.service.js"
+import { loginWithPassword, registerCustomer } from "./auth.service.js"
 import {
   revokeSession,
   rotateSession,
   type SessionTokens,
 } from "./token.service.js"
-import type { RequestOtpInput, VerifyOtpInput } from "./auth.schemas.js"
+import type { LoginInput, RegisterInput } from "./auth.schemas.js"
 
 const REFRESH_COOKIE = "ec_refresh"
 
@@ -46,30 +46,20 @@ function sessionPayload(tokens: SessionTokens) {
   }
 }
 
-export async function requestOtpController(req: Request, res: Response) {
-  const { phone } = req.body as RequestOtpInput
-  const result = await requestOtp(phone)
-
-  return sendSuccess(res, {
-    expiresInSeconds: result.expiresInSeconds,
-    // Só em desenvolvimento dizemos onde o código foi parar.
-    ...(env.AUTH_OTP_DEV_MODE
-      ? { devHint: "Código registrado no log do servidor." }
-      : {}),
-  })
-}
-
-export async function verifyOtpController(req: Request, res: Response) {
-  const { phone, code, fullName } = req.body as VerifyOtpInput
-  const { user, tokens, isNewUser } = await verifyOtp(phone, code, fullName)
+export async function registerController(req: Request, res: Response) {
+  const { phone, password, fullName } = req.body as RegisterInput
+  const { user, tokens } = await registerCustomer(phone, password, fullName)
 
   setRefreshCookie(res, tokens)
+  return sendSuccess(res, { user, isNewUser: true, ...sessionPayload(tokens) }, 201)
+}
 
-  return sendSuccess(
-    res,
-    { user, isNewUser, ...sessionPayload(tokens) },
-    isNewUser ? 201 : 200,
-  )
+export async function loginController(req: Request, res: Response) {
+  const { phone, password } = req.body as LoginInput
+  const { user, tokens } = await loginWithPassword(phone, password)
+
+  setRefreshCookie(res, tokens)
+  return sendSuccess(res, { user, isNewUser: false, ...sessionPayload(tokens) })
 }
 
 export async function refreshController(req: Request, res: Response) {

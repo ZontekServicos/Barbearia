@@ -1,114 +1,153 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, Users, AlertTriangle, Phone, Calendar } from 'lucide-react'
+import { Search, Users, Phone, Calendar, AlertCircle, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { CLIENTS } from '@/data/mock'
+import { Button } from '@/components/ui/button'
+import { ApiError } from '@/services/api'
+import { listUsers } from '@/services/admin'
+import type { AuthUser } from '@/services/auth'
 
-function formatDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-')
-  return `${d}/${m}/${y.slice(2)}`
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  })
 }
 
 export default function Clients() {
+  const [clients, setClients] = useState<AuthUser[]>([])
+  const [total, setTotal] = useState(0)
   const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const filtered = CLIENTS.filter(c =>
-    c.name.toLowerCase().includes(query.toLowerCase()) ||
-    c.phone.includes(query)
-  )
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // Clientes são os usuários reais com papel CUSTOMER.
+      const result = await listUsers({
+        role: 'CUSTOMER',
+        ...(query.trim() ? { search: query.trim() } : {}),
+        perPage: 50,
+      })
+      setClients(result.users)
+      setTotal(result.total)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Não foi possível carregar os clientes.')
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
 
-  const flagged = CLIENTS.filter(c => c.blocked || c.missedAppointments >= 2 || c.cancelledAppointments >= 2)
+  useEffect(() => {
+    const timer = setTimeout(() => void load(), query ? 350 : 0)
+    return () => clearTimeout(timer)
+  }, [load, query])
+
+  const blocked = clients.filter(client => client.status === 'BLOCKED')
 
   return (
     <div className="max-w-4xl">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Clientes</h2>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">{CLIENTS.length} clientes cadastrados.</p>
+          <p className="text-sm text-[var(--muted-foreground)] mt-1">
+            {loading
+              ? 'Carregando…'
+              : `${total} cliente${total !== 1 ? 's' : ''} cadastrado${total !== 1 ? 's' : ''}.`}
+          </p>
         </div>
       </div>
 
-      {/* Alerts */}
-      {flagged.length > 0 && (
+      {blocked.length > 0 && (
         <div className="border border-orange-500/30 bg-orange-500/8 rounded-2xl p-4 mb-6">
           <div className="flex items-center gap-2 text-orange-400 text-sm font-medium mb-2">
-            <AlertTriangle className="h-4 w-4" />
-            {flagged.length} cliente{flagged.length !== 1 ? 's' : ''} com alerta
+            <AlertCircle className="h-4 w-4" />
+            {blocked.length} cliente{blocked.length !== 1 ? 's' : ''} bloqueado
+            {blocked.length !== 1 ? 's' : ''}
           </div>
           <div className="space-y-1">
-            {flagged.map(c => (
+            {blocked.map(client => (
               <Link
-                key={c.id}
-                to={`/admin/clients/${c.id}`}
+                key={client.id}
+                to={`/admin/clients/${client.id}`}
                 className="flex items-center justify-between text-sm hover:text-[var(--foreground)] transition-colors py-0.5"
               >
-                <span className="text-[var(--foreground)]">{c.name}</span>
-                <span className="text-orange-400 text-xs">
-                  {c.blocked ? 'Bloqueado' : c.missedAppointments >= 2 ? `${c.missedAppointments} faltas` : `${c.cancelledAppointments} cancelamentos`}
-                </span>
+                <span className="text-[var(--foreground)]">{client.fullName ?? 'Sem nome'}</span>
+                <span className="text-orange-400 text-xs">Bloqueado</span>
               </Link>
             ))}
           </div>
         </div>
       )}
 
-      {/* Search */}
       <div className="relative mb-5">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--muted-foreground)]" />
         <input
-          type="text"
+          type="search"
           aria-label="Buscar clientes"
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Buscar por nome ou telefone..."
-          className="w-full pl-10 pr-4 py-3 rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
+          className="w-full pl-10 pr-4 py-3 rounded-xl border border-[var(--primary)]/20 bg-[var(--background)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-all"
         />
       </div>
 
-      {/* List */}
-      {filtered.length === 0 ? (
-        <div className="border border-dashed border-[var(--border)] rounded-2xl p-12 text-center">
+      {loading ? (
+        <p role="status" className="text-sm text-[var(--muted-foreground)]">
+          Carregando clientes…
+        </p>
+      ) : error ? (
+        <div role="alert" className="border border-red-500/40 bg-red-500/10 rounded-2xl p-5 text-center">
+          <AlertCircle className="h-8 w-8 text-red-400 mx-auto mb-3" />
+          <p className="text-sm text-red-200 mb-4">{error}</p>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Tentar novamente
+          </Button>
+        </div>
+      ) : clients.length === 0 ? (
+        <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-2xl p-12 text-center">
           <Users className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
-          <p className="text-[var(--muted-foreground)] text-sm">Nenhum cliente encontrado para "{query}".</p>
+          <p className="text-[var(--muted-foreground)] text-sm">
+            {query
+              ? `Nenhum cliente encontrado para "${query}".`
+              : 'Nenhum cliente cadastrado ainda.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(client => (
+          {clients.map(client => (
             <Link
               key={client.id}
               to={`/admin/clients/${client.id}`}
-              className="flex items-center justify-between p-4 border border-[var(--border)] bg-[var(--card)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/40 transition-all group"
+              className="flex items-center justify-between p-4 border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-xl hover:border-[var(--primary)]/45 transition-all"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-full bg-[var(--secondary)] flex items-center justify-center text-sm font-bold text-[var(--primary)] shrink-0">
-                  {client.name[0]}
+                <div className="w-10 h-10 rounded-full bg-[var(--primary)]/10 border border-[var(--primary)]/30 flex items-center justify-center text-sm font-bold text-[var(--primary)] shrink-0">
+                  {(client.fullName ?? '?').charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="font-semibold text-sm truncate">{client.name}</p>
-                    {client.blocked && <Badge variant="blocked">Bloqueado</Badge>}
-                    {!client.blocked && client.missedAppointments >= 2 && <Badge variant="warning">Faltoso</Badge>}
+                    <p className="font-semibold text-sm truncate">{client.fullName ?? 'Sem nome'}</p>
+                    {client.status === 'BLOCKED' && <Badge variant="blocked">Bloqueado</Badge>}
+                    {client.status === 'PENDING' && <Badge variant="warning">Pendente</Badge>}
                   </div>
                   <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] mt-0.5">
-                    <Phone className="h-3 w-3" />
-                    <span>{client.phone}</span>
+                    <Phone className="h-3 w-3 shrink-0" />
+                    <span className="tabular-nums">{client.phoneFormatted}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-6 shrink-0 text-right">
-                <div className="hidden sm:block">
-                  <p className="text-sm font-semibold text-[var(--foreground)]">{client.totalAppointments}</p>
-                  <p className="text-xs text-[var(--muted-foreground)]">agendamentos</p>
+              <div className="hidden sm:block text-right shrink-0">
+                <div className="flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
+                  <Calendar className="h-3 w-3" />
+                  <span>{formatDate(client.createdAt)}</span>
                 </div>
-                <div className="hidden sm:block">
-                  <div className="flex items-center gap-1 text-xs text-[var(--muted-foreground)]">
-                    <Calendar className="h-3 w-3" />
-                    <span>{formatDate(client.lastVisit)}</span>
-                  </div>
-                  <p className="text-xs text-[var(--muted-foreground)] mt-0.5 text-right">última visita</p>
-                </div>
+                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">cadastro</p>
               </div>
             </Link>
           ))}

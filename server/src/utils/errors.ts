@@ -2,9 +2,10 @@
 export const ErrorCodes = {
   VALIDATION_ERROR: "VALIDATION_ERROR",
   INVALID_PHONE: "INVALID_PHONE",
-  OTP_INVALID: "OTP_INVALID",
-  OTP_EXPIRED: "OTP_EXPIRED",
-  OTP_MAX_ATTEMPTS: "OTP_MAX_ATTEMPTS",
+  /// Resposta única de login malsucedido: telefone inexistente, senha errada e
+  /// conta sem credencial estabelecida são indistinguíveis de fora.
+  INVALID_CREDENTIALS: "INVALID_CREDENTIALS",
+  PASSWORD_MISMATCH: "PASSWORD_MISMATCH",
   UNAUTHENTICATED: "UNAUTHENTICATED",
   INVALID_TOKEN: "INVALID_TOKEN",
   FORBIDDEN: "FORBIDDEN",
@@ -15,7 +16,6 @@ export const ErrorCodes = {
   RATE_LIMITED: "RATE_LIMITED",
   NOT_FOUND: "NOT_FOUND",
   INTERNAL_ERROR: "INTERNAL_ERROR",
-  SMS_UNAVAILABLE: "SMS_UNAVAILABLE",
   CONFLICT: "CONFLICT",
 } as const
 

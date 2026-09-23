@@ -30,14 +30,18 @@ export function Badge({ className, variant = 'default', ...props }: BadgeProps) 
   )
 }
 
-import type { AppointmentStatus } from '@/data/mock'
-export type { AppointmentStatus } from '@/data/mock'
+import type { AppointmentStatus } from '@/services/booking'
+export type { AppointmentStatus } from '@/services/booking'
 
+/**
+ * Status vem do backend em maiúsculas. Rótulo textual sempre acompanha a cor —
+ * ninguém depende só do tom para entender a situação.
+ */
 export const statusConfig: Record<AppointmentStatus, { label: string; variant: BadgeVariant }> = {
-  confirmed: { label: 'Confirmado', variant: 'confirmed' },
-  completed: { label: 'Concluído', variant: 'completed' },
-  cancelled: { label: 'Cancelado', variant: 'cancelled' },
-  missed: { label: 'Não compareceu', variant: 'missed' },
+  CONFIRMED: { label: 'Confirmado', variant: 'confirmed' },
+  COMPLETED: { label: 'Concluído', variant: 'completed' },
+  CANCELLED: { label: 'Cancelado', variant: 'cancelled' },
+  NO_SHOW: { label: 'Não compareceu', variant: 'missed' },
 }
 
 export function StatusBadge({ status }: { status: AppointmentStatus }) {

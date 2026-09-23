@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from "./middlewares/error-handler.js"
 import { authRouter } from "./modules/auth/auth.routes.js"
 import { usersRouter } from "./modules/users/users.routes.js"
 import { adminRouter } from "./modules/admin/admin.routes.js"
+import { bookingRouter } from "./modules/booking/booking.routes.js"
 import { AppError, ErrorCodes } from "./utils/errors.js"
 import { sendSuccess } from "./utils/http.js"
 
@@ -33,7 +34,7 @@ export function createApp(): Express {
       },
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Protection"],
-      methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
 
@@ -48,7 +49,7 @@ export function createApp(): Express {
     }),
   )
 
-  app.use(["/auth", "/users", "/admin"], (_req, res, next) => {
+  app.use(["/auth", "/users", "/admin", "/booking"], (_req, res, next) => {
     res.set("Cache-Control", "no-store")
     next()
   })
@@ -70,6 +71,7 @@ export function createApp(): Express {
   )
   app.use("/users", usersRouter)
   app.use("/admin", adminRouter)
+  app.use("/booking", bookingRouter)
 
   app.use(notFoundHandler)
   app.use(errorHandler)

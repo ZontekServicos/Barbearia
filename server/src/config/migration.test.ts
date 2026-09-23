@@ -45,7 +45,15 @@ describe('migration inicial', () => {
     )
     const tables = result.rows.map(row => row.table_name)
 
-    assert.deepEqual(tables, ['admin_audit_logs', 'otp_challenges', 'refresh_tokens', 'users'])
+    assert.deepEqual(tables, [
+      'admin_audit_logs',
+      'appointments',
+      'business_hours',
+      'refresh_tokens',
+      'schedule_blocks',
+      'services',
+      'users',
+    ])
   })
 
   it('garante telefone único — dois clientes não podem usar o mesmo número', async () => {

@@ -46,7 +46,8 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
   }
 }
 
-// Caller holds the user lock; session creation belongs to the same transaction as OTP consumption.
+// Caller holds the user lock; session creation belongs to the same transaction
+// as the credential check, so uma verificação bem-sucedida e a sessão nascem juntas.
 export async function createSession(
   tx: Prisma.TransactionClient,
   user: {

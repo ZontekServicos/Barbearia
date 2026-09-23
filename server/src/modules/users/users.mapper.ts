@@ -9,7 +9,8 @@ export interface PublicUser {
   phoneFormatted: string
   role: UserRole
   status: UserStatus
-  phoneVerified: boolean
+  /** Conta herdada do fluxo OTP ainda sem credencial fica `false`. */
+  hasPassword: boolean
   createdAt: string
 }
 
@@ -19,7 +20,7 @@ interface UserRecord {
   phone: string
   role: UserRole
   status: UserStatus
-  phoneVerifiedAt: Date | null
+  passwordHash?: string | null
   createdAt: Date
 }
 
@@ -34,7 +35,8 @@ export function toPublicUser(user: UserRecord): PublicUser {
     phoneFormatted: formatPhoneForDisplay(user.phone),
     role: user.role,
     status: user.status,
-    phoneVerified: user.phoneVerifiedAt !== null,
+    // Booleano, nunca o hash: o hash não sai da camada de dados.
+    hasPassword: Boolean(user.passwordHash),
     createdAt: user.createdAt.toISOString(),
   }
 }

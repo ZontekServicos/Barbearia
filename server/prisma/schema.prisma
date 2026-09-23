@@ -1,5 +1,5 @@
-// ErickCorttes Barbearia — schema base de usuários, autenticação e auditoria.
-// A próxima fase (Service, Barber, Availability, Appointment) se apoia neste núcleo.
+// ErickCorttes Barbearia — usuários, autenticação por telefone + senha,
+// agenda e auditoria administrativa.
 
 generator client {
   provider = "prisma-client"
@@ -30,32 +30,28 @@ model User {
   phone           String     @unique @db.VarChar(20)
   role            UserRole   @default(CUSTOMER)
   status          UserStatus @default(PENDING)
+  /// Argon2id. Nulo = conta herdada do fluxo OTP, sem credencial estabelecida.
+  /// Enquanto for nulo o login por senha é recusado (ver auth.service).
+  passwordHash      String?   @map("password_hash") @db.VarChar(255)
+  /// Marca a última troca de senha; sessões anteriores a ela são revogadas.
+  passwordUpdatedAt DateTime? @map("password_updated_at")
+  /// Freio durável contra força bruta, independente de IP e de réplica.
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  /// Preenchido apenas pelas contas que verificaram o telefone por SMS antes
+  /// da migração. Sem canal de verificação, nada mais o preenche.
   phoneVerifiedAt DateTime?  @map("phone_verified_at")
   createdAt       DateTime   @default(now()) @map("created_at")
   updatedAt       DateTime   @updatedAt @map("updated_at")
 
   refreshTokens   RefreshToken[]
+  appointments    Appointment[]
   actionsPerfomed AdminAuditLog[] @relation("AdminActor")
   actionsReceived AdminAuditLog[] @relation("AdminTarget")
 
   @@index([status])
   @@index([role])
   @@map("users")
-}
-
-/// Desafio de OTP. O código em texto puro nunca é persistido — apenas o hash scrypt.
-model OtpChallenge {
-  id         String    @id @default(uuid()) @db.Uuid
-  phone      String    @db.VarChar(20)
-  codeHash   String    @map("code_hash") @db.VarChar(255)
-  expiresAt  DateTime  @map("expires_at")
-  attempts   Int       @default(0)
-  consumedAt DateTime? @map("consumed_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-
-  @@index([phone, createdAt])
-  @@index([expiresAt])
-  @@map("otp_challenges")
 }
 
 /// Refresh token rotativo. Guardamos apenas o hash SHA-256 do token emitido.
@@ -76,6 +72,94 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("refresh_tokens")
+}
+
+/// Serviço oferecido pela barbearia.
+model Service {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String   @db.VarChar(80)
+  description     String   @default("") @db.VarChar(240)
+  /// Dinheiro em centavos: inteiro exato, sem ponto flutuante.
+  priceCents      Int      @map("price_cents")
+  durationMinutes Int      @map("duration_minutes")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  appointments Appointment[]
+
+  @@index([active])
+  @@map("services")
+}
+
+/// Horário de funcionamento semanal. Uma linha por dia da semana (0 = domingo).
+///
+/// Os minutos são hora local da barbearia (ver SHOP_TIMEZONE), não UTC: "abre
+/// às 9h" continua sendo 9h independentemente de fuso ou horário de verão.
+model BusinessHours {
+  id                String   @id @default(uuid()) @db.Uuid
+  /// 0 = domingo ... 6 = sábado
+  weekday           Int      @unique
+  closed            Boolean  @default(false)
+  openMinute        Int      @map("open_minute")
+  closeMinute       Int      @map("close_minute")
+  /// Intervalo opcional (almoço). Ambos nulos = sem intervalo.
+  breakStartMinute  Int?     @map("break_start_minute")
+  breakEndMinute    Int?     @map("break_end_minute")
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("business_hours")
+}
+
+/// Bloqueio administrativo da agenda (folga, compromisso, manutenção).
+model ScheduleBlock {
+  id        String   @id @default(uuid()) @db.Uuid
+  startsAt  DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt    DateTime @map("ends_at") @db.Timestamptz(3)
+  reason    String   @db.VarChar(160)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([startsAt, endsAt])
+  @@map("schedule_blocks")
+}
+
+enum AppointmentStatus {
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+/// Agendamento. Um barbeiro nesta fase, então a exclusão de sobreposição é global.
+///
+/// A proteção contra reserva dupla é uma EXCLUDE constraint no PostgreSQL
+/// (ver migration): duas transações concorrentes não conseguem gravar dois
+/// CONFIRMED sobrepostos, mesmo commitando ao mesmo tempo.
+model Appointment {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String            @map("user_id") @db.Uuid
+  serviceId String            @map("service_id") @db.Uuid
+  startsAt  DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt    DateTime          @map("ends_at") @db.Timestamptz(3)
+  status    AppointmentStatus @default(CONFIRMED)
+  notes     String?           @db.VarChar(280)
+
+  /// Congelados no momento da reserva: alterar o preço do serviço depois não
+  /// pode reescrever o histórico de quem já agendou.
+  serviceName       String @map("service_name") @db.VarChar(80)
+  servicePriceCents Int    @map("service_price_cents")
+
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([startsAt])
+  @@index([userId, startsAt])
+  @@index([status, startsAt])
+  @@map("appointments")
 }
 
 /// Trilha de auditoria das ações administrativas (aprovar, bloquear, reativar, promover).

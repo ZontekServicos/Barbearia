@@ -1,81 +1,60 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
-  generateOtpCode,
   generateRefreshToken,
-  hashOtpCode,
+  generateTemporaryPassword,
   hashRefreshToken,
-  verifyOtpCode,
 } from "./crypto.js"
 
-describe("generateOtpCode", () => {
-  it("gera sempre 6 dígitos, incluindo com zeros à esquerda", () => {
-    for (let i = 0; i < 200; i++) {
-      const code = generateOtpCode()
-      assert.match(code, /^\d{6}$/)
+describe("generateRefreshToken", () => {
+  it("produz 256 bits em base64url, sem caracteres que quebrem cookie ou URL", () => {
+    for (let i = 0; i < 20; i++) {
+      const token = generateRefreshToken()
+      assert.match(token, /^[A-Za-z0-9_-]{43}$/)
     }
   })
 
-  it("não repete o mesmo código de forma óbvia", () => {
-    const amostra = new Set(Array.from({ length: 50 }, () => generateOtpCode()))
-    assert.ok(amostra.size > 40, "entropia suspeita na geração de OTP")
-  })
-})
-
-describe("hashOtpCode / verifyOtpCode", () => {
-  it("nunca guarda o código em texto puro", async () => {
-    const hash = await hashOtpCode("123456")
-    assert.ok(!hash.includes("123456"))
-    assert.ok(hash.startsWith("scrypt$"))
-  })
-
-  it("usa salt distinto a cada hash", async () => {
-    const a = await hashOtpCode("123456")
-    const b = await hashOtpCode("123456")
-    assert.notEqual(a, b)
-  })
-
-  it("valida o código correto", async () => {
-    const hash = await hashOtpCode("123456")
-    assert.equal(await verifyOtpCode("123456", hash), true)
-  })
-
-  it("recusa o código errado", async () => {
-    const hash = await hashOtpCode("123456")
-    assert.equal(await verifyOtpCode("654321", hash), false)
-    assert.equal(await verifyOtpCode("000000", hash), false)
-  })
-
-  it("recusa hash malformado sem explodir", async () => {
-    assert.equal(await verifyOtpCode("123456", "lixo"), false)
-    assert.equal(await verifyOtpCode("123456", "scrypt$só-uma-parte"), false)
-    assert.equal(await verifyOtpCode("123456", "bcrypt$aa$bb"), false)
-  })
-})
-
-describe("refresh token", () => {
-  it("gera tokens de alta entropia e únicos", () => {
-    const tokens = new Set(
-      Array.from({ length: 100 }, () => generateRefreshToken()),
+  it("não repete", () => {
+    const amostra = new Set(
+      Array.from({ length: 200 }, () => generateRefreshToken()),
     )
-    assert.equal(tokens.size, 100)
-    assert.ok(generateRefreshToken().length >= 40)
-  })
-
-  it("hash é determinístico e não reversível ao token", () => {
-    const token = generateRefreshToken()
-    const hash = hashRefreshToken(token)
-    assert.equal(hash, hashRefreshToken(token))
-    assert.ok(!hash.includes(token))
-    assert.match(hash, /^[a-f0-9]{64}$/)
+    assert.equal(amostra.size, 200)
   })
 })
 
-it("hash com hex inválido ou tamanho zero não valida OTP", async () => {
-  for (const value of [
-    "scrypt$zz$zz",
-    "scrypt$$",
-    "scrypt$" + "a".repeat(32) + "$zz",
-  ])
-    assert.equal(await verifyOtpCode("123456", value), false)
+describe("hashRefreshToken", () => {
+  it("é determinístico e devolve SHA-256 em hexadecimal", () => {
+    const token = generateRefreshToken()
+    assert.equal(hashRefreshToken(token), hashRefreshToken(token))
+    assert.match(hashRefreshToken(token), /^[a-f0-9]{64}$/)
+  })
+
+  it("tokens diferentes geram hashes diferentes", () => {
+    assert.notEqual(
+      hashRefreshToken(generateRefreshToken()),
+      hashRefreshToken(generateRefreshToken()),
+    )
+  })
+})
+
+describe("generateTemporaryPassword", () => {
+  it("evita caracteres ambíguos que se perdem ao ditar a senha", () => {
+    for (let i = 0; i < 50; i++) {
+      const password = generateTemporaryPassword()
+      assert.equal(password.length, 16)
+      assert.doesNotMatch(password, /[0O1lI]/)
+      assert.match(password, /^[A-Za-z2-9]+$/)
+    }
+  })
+
+  it("não repete entre chamadas", () => {
+    const amostra = new Set(
+      Array.from({ length: 200 }, () => generateTemporaryPassword()),
+    )
+    assert.equal(amostra.size, 200)
+  })
+
+  it("respeita o comprimento pedido", () => {
+    assert.equal(generateTemporaryPassword(24).length, 24)
+  })
 })

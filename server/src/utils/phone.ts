@@ -8,8 +8,9 @@ const BRAZIL_COUNTRY_CODE = "55"
  * Aceita as formas que o frontend e o usuário produzem na prática:
  *   "(71) 99999-1111", "71999991111", "5571999991111", "+55 71 99999-1111"
  *
- * Só aceitamos celular (9 dígitos após o DDD, iniciando em 9) porque o canal de
- * verificação é SMS — um fixo nunca receberia o código.
+ * Só aceitamos celular (9 dígitos após o DDD, iniciando em 9): o número é o
+ * identificador de login e o WhatsApp de contato da barbearia, então um fixo
+ * não serve para nenhum dos dois papéis.
  */
 export function normalizePhone(rawInput: string): string {
   if (typeof rawInput !== "string") {

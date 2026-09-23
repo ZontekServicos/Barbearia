@@ -13,8 +13,10 @@ import {
   logout as logoutRequest,
   restoreSession,
   updateMyProfile,
-  verifyOtp as verifyOtpRequest,
+  login as loginRequest,
+  register as registerRequest,
   type AuthUser,
+  type RegisterPayload,
 } from "@/services/auth"
 export type AuthStatus = "loading" | "unauthenticated" | "authenticated" | "pendingApproval" | "blocked" | "error"
 interface AuthContextValue {
@@ -22,11 +24,8 @@ interface AuthContextValue {
   user: AuthUser | null
   error: string | null
   isAdmin: boolean
-  signInWithOtp: (
-    phone: string,
-    code: string,
-    fullName?: string,
-  ) => Promise<AuthUser>
+  signIn: (phone: string, password: string) => Promise<AuthUser>
+  signUp: (payload: RegisterPayload) => Promise<AuthUser>
   signOut: () => Promise<void>
   refreshUser: () => Promise<void>
   updateName: (fullName: string) => Promise<AuthUser>
@@ -74,19 +73,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
     return () => setSessionLostHandler(null)
   }, [])
-  const signInWithOtp = useCallback(
-    async (phone: string, code: string, fullName?: string) => {
-      const startedAt = ++revision.current
-      setError(null)
-      const result = await verifyOtpRequest(phone, code, fullName)
-      if (startedAt === revision.current) {
-        setUser(result.user)
-        setStatus(statusForUser(result.user))
-      }
-      return result.user
-    },
-    [],
-  )
+  const signIn = useCallback(async (phone: string, password: string) => {
+    const startedAt = ++revision.current
+    setError(null)
+    const result = await loginRequest(phone, password)
+    if (startedAt === revision.current) {
+      setUser(result.user)
+      setStatus(statusForUser(result.user))
+    }
+    return result.user
+  }, [])
+  const signUp = useCallback(async (payload: RegisterPayload) => {
+    const startedAt = ++revision.current
+    setError(null)
+    const result = await registerRequest(payload)
+    if (startedAt === revision.current) {
+      setUser(result.user)
+      setStatus(statusForUser(result.user))
+    }
+    return result.user
+  }, [])
   const signOut = useCallback(async () => {
     revision.current++
     setUser(null)
@@ -131,12 +137,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       error,
       isAdmin: status === "authenticated" && user?.role === "ADMIN",
-      signInWithOtp,
+      signIn,
+      signUp,
       signOut,
       refreshUser,
       updateName,
     }),
-    [status, user, error, signInWithOtp, signOut, refreshUser, updateName],
+    [status, user, error, signIn, signUp, signOut, refreshUser, updateName],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

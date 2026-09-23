@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "format": "oxfmt",
     "typecheck": "tsc --noEmit",
-    "test:auth": "node server/node_modules/tsx/dist/cli.mjs --test src/services/api.test.ts"
+    "test:auth": "node server/node_modules/tsx/dist/cli.mjs --test src/services/*.test.ts src/lib/*.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

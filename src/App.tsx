@@ -14,6 +14,8 @@ import AdminLayout from "./components/layouts/AdminLayout"
 // Public
 import Landing from "./pages/Landing"
 import Login from "./pages/client/Login"
+import Register from "./pages/client/Register"
+import PublicBooking from "./pages/PublicBooking"
 
 // Client area
 import ClientHome from "./pages/client/ClientHome"
@@ -58,6 +60,14 @@ export default function App() {
           {/* Público */}
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/cadastro" element={<Register />} />
+
+          {/*
+            Agendamento público: serviço, data e horário podem ser escolhidos
+            antes de existir conta. A confirmação exige sessão e conta
+            aprovada — quem decide isso é o backend, não esta rota.
+          */}
+          <Route path="/agendar" element={<PublicBooking />} />
 
           {/* Estados de conta — exigem sessão, mas não conta aprovada */}
           <Route

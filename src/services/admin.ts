@@ -41,3 +41,15 @@ export async function countPendingUsers(): Promise<number> {
   const data = await apiRequest<{ pending: number }>('/admin/users/pending-count')
   return data.pending
 }
+
+export async function getUser(userId: string): Promise<AuthUser> {
+  const data = await apiRequest<{ user: AuthUser }>(`/admin/users/${userId}`)
+  return data.user
+}
+
+/** Redefinição presencial: nova senha enviada, nunca retornada pela API. */
+export async function resetUserPassword(userId: string, password: string): Promise<{ user: AuthUser }> {
+  return apiRequest(`/admin/users/${userId}/reset-password`, {
+    method: "POST", body: { password, confirmPassword: password },
+  })
+}

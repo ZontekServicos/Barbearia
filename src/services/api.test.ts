@@ -145,7 +145,7 @@ describe("cliente HTTP e concorrência de sessão", () => {
       return denied()
     }
     await assert.rejects(
-      apiRequest("/auth/verify-otp", {
+      apiRequest("/auth/login", {
         skipRefresh: true,
         body: {},
         method: "POST",
@@ -175,4 +175,29 @@ describe("cliente HTTP e concorrência de sessão", () => {
       status: 502,
     })
   })
+  for (const action of ["login", "register"] as const) {
+    it("logout waits for in-flight " + action + " and never restores its session", async () => {
+      const auth = await import("./auth")
+      let release: (response: Response) => void = () => { throw new Error("request did not start") }
+      const order: string[] = []
+      globalThis.fetch = async (url) => {
+        if (String(url).endsWith("/auth/" + action)) {
+          const response = await new Promise<Response>(resolve => { release = resolve })
+          order.push("authentication-response")
+          return response
+        }
+        if (String(url).endsWith("/auth/logout")) order.push("logout-request")
+        return ok({})
+      }
+      const pending = (action === "login" ? auth.login("71999991111", "synthetic-password") : auth.register({fullName:"Test",phone:"71999991111",password:"synthetic-password",confirmPassword:"synthetic-password"})).catch(() => null)
+      await tick()
+      const logout = auth.logout()
+      await tick()
+      release(ok({accessToken:"must-not-return-after-logout",user:{id:"synthetic"}}))
+      await Promise.all([pending,logout])
+      assert.deepEqual(order,["authentication-response","logout-request"])
+      assert.equal(getAccessToken(),null)
+    })
+  }
+
 })

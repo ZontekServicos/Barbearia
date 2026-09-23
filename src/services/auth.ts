@@ -1,6 +1,6 @@
 import {
   apiRequest,
-  setAccessToken,
+  authenticate,
   refreshSession,
   beginLogout,
   finishLogout,
@@ -16,7 +16,8 @@ export interface AuthUser {
   phoneFormatted: string
   role: UserRole
   status: UserStatus
-  phoneVerified: boolean
+  /** Contas herdadas do fluxo antigo por SMS ainda não têm senha definida. */
+  hasPassword: boolean
   createdAt: string
 }
 
@@ -27,28 +28,28 @@ interface SessionResponse {
   accessTokenExpiresAt: string
 }
 
-export async function requestOtp(
-  phone: string,
-): Promise<{ expiresInSeconds: number }> {
-  return apiRequest("/auth/request-otp", {
-    method: "POST",
-    body: { phone },
-    skipRefresh: true,
-  })
+export interface RegisterPayload {
+  fullName: string
+  phone: string
+  password: string
+  confirmPassword: string
 }
 
-export async function verifyOtp(
-  phone: string,
-  code: string,
-  fullName?: string,
+/**
+ * Cria a conta. O backend revalida tudo — nome, telefone, força e confirmação
+ * da senha — então a validação da tela existe só para dar retorno imediato.
+ */
+export async function register(
+  payload: RegisterPayload,
 ): Promise<SessionResponse> {
-  const data = await apiRequest<SessionResponse>("/auth/verify-otp", {
-    method: "POST",
-    skipRefresh: true,
-    body: { phone, code, ...(fullName ? { fullName } : {}) },
-  })
-  setAccessToken(data.accessToken)
-  return data
+  return authenticate<SessionResponse>("/auth/register", payload)
+}
+
+export async function login(
+  phone: string,
+  password: string,
+): Promise<SessionResponse> {
+  return authenticate<SessionResponse>("/auth/login", { phone, password })
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser> {
@@ -64,6 +65,21 @@ export async function updateMyProfile(fullName: string): Promise<AuthUser> {
   return data.user
 }
 
+/**
+ * Troca a senha. O backend encerra todas as sessões, inclusive esta — quem
+ * chamar precisa mandar o usuário para o login depois.
+ */
+export async function changePassword(
+  currentPassword: string,
+  password: string,
+  confirmPassword: string,
+): Promise<void> {
+  await apiRequest("/users/me/password", {
+    method: "PATCH",
+    body: { currentPassword, password, confirmPassword },
+  })
+}
+
 export async function logout(): Promise<void> {
   await beginLogout()
   try {
@@ -76,6 +92,7 @@ export async function logout(): Promise<void> {
     finishLogout()
   }
 }
+
 export async function restoreSession(): Promise<AuthUser | null> {
   if (!(await refreshSession())) return null
   return fetchCurrentUser()

@@ -4,11 +4,13 @@ type LogLevel = "debug" | "info" | "warn" | "error"
 
 /** Chaves que nunca podem aparecer em log, mesmo se alguém passar o objeto inteiro. */
 const REDACTED_KEYS = new Set([
-  "code",
-  "otp",
-  "otpcode",
-  "codehash",
   "password",
+  "currentpassword",
+  "confirmpassword",
+  "newpassword",
+  "temporarypassword",
+  "passwordhash",
+  "password_hash",
   "token",
   "accesstoken",
   "refreshtoken",
@@ -16,15 +18,8 @@ const REDACTED_KEYS = new Set([
   "authorization",
   "cookie",
   "jwt_access_secret",
-  "jwt_refresh_secret",
   "database_url",
-  "sms_api_key",
-  "sms_api_secret",
-  "twilio_auth_token",
-  "twilio_account_sid",
-  "authtoken",
-  "accountsid",
-  "body",
+  "bootstrap_admin_password",
 ])
 
 function redact(value: unknown, depth = 0): unknown {

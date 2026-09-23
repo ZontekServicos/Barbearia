@@ -23,18 +23,27 @@ export const globalRateLimit = rateLimit({
 })
 
 /**
- * Pedido de OTP: limite rígido por IP. Cada envio custa um SMS e é um vetor
- * de abuso (enumeração e flood).
+ * Cadastro: cada requisição cria uma conta real que o administrador terá de
+ * revisar. Limite rígido por IP para que ninguém encha a fila de aprovação.
  */
-export const requestOtpRateLimit = rateLimit({
+export const registerRateLimit = rateLimit({
   ...sharedOptions,
   windowMs: 15 * 60_000,
   limit: 5,
 })
 
-/** Verificação de OTP: evita força bruta distribuída sobre o código. */
-export const verifyOtpRateLimit = rateLimit({
+/**
+ * Login: freio por IP contra força bruta e contra varredura de telefones.
+ *
+ * Complementa — não substitui — o bloqueio por conta em auth.service, que
+ * fica no banco e por isso continua valendo com várias réplicas e quando o
+ * atacante troca de IP. Este limitador é por processo.
+ */
+export const loginRateLimit = rateLimit({
   ...sharedOptions,
   windowMs: 15 * 60_000,
   limit: 10,
 })
+
+/** Limita tentativas da senha atual e redefinições privilegiadas. */
+export const passwordChangeRateLimit = rateLimit({ ...sharedOptions, windowMs: 15 * 60_000, limit: 10 })
