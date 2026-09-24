@@ -47,17 +47,38 @@ interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   body?: unknown
   skipRefresh?: boolean
+  /** Cancela a requisição. Usado para descartar respostas que ficaram velhas. */
+  signal?: AbortSignal
+}
+
+/**
+ * Cancelamento pedido por quem chamou — não é falha.
+ *
+ * A tela que aborta uma consulta antiga não deve mostrar erro nenhum: ela só
+ * perdeu o interesse na resposta. Distinguir isso de uma queda de rede evita
+ * o banner vermelho que pisca ao trocar de semana rápido.
+ */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "ABORTED"
 }
 async function send(
   path: string,
   options: RequestOptions,
   token: string | null,
 ): Promise<Response> {
+  // Combina o timeout com o cancelamento de quem chamou. Feito na mão em vez
+  // de AbortSignal.any() para não exigir um Safari muito recente.
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+  const abortFromCaller = () => controller.abort()
+  options.signal?.addEventListener("abort", abortFromCaller, { once: true })
+  if (options.signal?.aborted) controller.abort()
+
   try {
     return await fetch(API_URL + path, {
       method: options.method ?? "GET",
       credentials: "include",
-      signal: AbortSignal.timeout(15000),
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Protection": "1",
@@ -68,10 +89,19 @@ async function send(
         : { body: JSON.stringify(options.body) }),
     })
   } catch {
+    if (options.signal?.aborted) {
+      throw new ApiError(0, {
+        code: "ABORTED",
+        message: "Requisição cancelada.",
+      })
+    }
     throw new ApiError(0, {
       code: "NETWORK_ERROR",
       message: "Não foi possível falar com o servidor. Verifique sua conexão.",
     })
+  } finally {
+    clearTimeout(timeout)
+    options.signal?.removeEventListener("abort", abortFromCaller)
   }
 }
 async function parseResponse<T>(response: Response): Promise<T> {

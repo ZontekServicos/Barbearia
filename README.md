@@ -162,6 +162,57 @@ A seleção é guardada em `sessionStorage` (serviço, data, horário — nada p
 
 Cliente `PENDING` percorre o fluxo e vê a mensagem de cadastro em análise em vez de uma confirmação — a política de aprovação da barbearia não mudou, e quem a aplica é o backend.
 
+## Disponibilidade
+
+Dois conceitos que o sistema mantém separados de propósito:
+
+| Conceito | O que é | Onde vive |
+| --- | --- | --- |
+| **Duração do serviço** | Quanto tempo o atendimento ocupa a cadeira | `Service.durationMinutes`, no banco |
+| **Intervalo de início** | De quanto em quanto tempo sugerimos um começo | `BookingRules.slotIntervalMinutes` = 15 |
+
+A grade de início é sempre de 15 em 15 minutos, igual para todo serviço. O que muda com a duração é **até onde** a grade vai, não o passo. Um horário só é oferecido quando o período inteiro necessário para aquele serviço está livre:
+
+```
+Expediente 09:00–12:00 · reserva existente 09:30–10:10 · Corte de 30 min
+
+09:00 -> 09:00–09:30  livre
+09:15 -> 09:15–09:45  invade a reserva
+09:30 -> ocupado
+10:00 -> 10:00–10:30  invade até 10:10
+10:15 -> 10:15–10:45  livre
+```
+
+A resposta de `/booking/availability` inclui `slotIntervalMinutes` e `windows`. É a forma mais rápida de conferir, pelo DevTools, qual grade o servidor que está no ar realmente usa — útil quando a tela e o código parecem discordar.
+
+### Janelas de expediente
+
+O intervalo de almoço parte o dia em duas janelas (09:00–12:00 e 14:00–20:00) em vez de virar um período "ocupado". A diferença importa: como janela, ele reancora a grade — cada janela começa na própria abertura, inclusive quando o fim do almoço não coincide com a grade da manhã — e impede por construção que um atendimento o atravesse. Um serviço de 50 minutos às 11:30 terminaria 12:20 e por isso não é oferecido, mesmo havendo expediente à tarde.
+
+A engine (`availability.engine.ts`) é uma função pura sobre "minutos desde a meia-noite local": sem banco, sem relógio e sem fuso. A conversão de instantes fica em `availability.service.ts`, e o fuso continua centralizado em `utils/time.ts`.
+
+### Ocupação
+
+Contam como ocupado os agendamentos `CONFIRMED` e os bloqueios administrativos — a engine trata os dois igual. `CANCELLED`, `NO_SHOW` e `COMPLETED` não bloqueiam, então cancelar libera o horário na consulta seguinte, sem reiniciar nada.
+
+Todo intervalo é semiaberto `[início, fim)`: um atendimento que termina 09:30 e outro que começa 09:30 não conflitam. A mesma regra vale no frontend, no backend e na `EXCLUDE` constraint do PostgreSQL (`tstzrange(starts_at, ends_at, '[)')`), que continua sendo a última linha de defesa contra reserva dupla.
+
+### Buffers
+
+`Service.bufferBeforeMinutes` e `bufferAfterMinutes` estão **desabilitados**. O padrão é 0, a API rejeita sua configuração, a UI não oferece esses campos e a migration `20260924110000_disable_service_buffers` exige os dois valores iguais a zero tanto em `services` quanto em `appointments`. Isso protege inclusive gravações diretas no banco. A criação e a disponibilidade também recusam serviço com buffer diferente de zero.
+
+A `EXCLUDE` atual protege `[starts_at, ends_at)`, portanto cobre toda a ocupação enquanto os buffers forem zero. Os campos no agendamento são snapshots reservados para evolução futura. Não habilite buffers removendo apenas o CHECK ou expondo um campo na UI.
+
+Uma evolução futura precisa excluir o intervalo completo `[starts_at - buffer_before, ends_at + buffer_after)`, com limites derivados pelo próprio banco (por exemplo, colunas preenchidas por trigger), preencher e verificar os registros existentes, criar a exclusão e só então retirar os CHECKs de zero. A migração deve testar concorrência entre processos, fronteiras de dia/fuso e atualização dos snapshots. Essa alteração da exclusão fica fora desta entrega.
+
+A migration que desabilita buffers é transacional: se encontrar algum valor não zero, falha sem apagar dados nem reescrever reservas. Investigue esses dados antes de prosseguir com um deploy; não force a migration nem zere o histórico automaticamente.
+
+### Duração editada pelo admin
+
+Alterar `durationMinutes` na tela de Serviços vale na consulta seguinte de disponibilidade. Agendamentos já feitos **não** são tocados: eles guardam o próprio `starts_at`/`ends_at`, então o histórico não é reescrito quando a configuração muda.
+
+No cliente, trocar o serviço no meio do fluxo limpa o horário já escolhido e avisa — um intervalo que comportava 30 minutos pode não comportar 50, e guardá-lo em silêncio levaria a pessoa a confirmar algo que o backend recusaria.
+
 ## Bootstrap de administrador
 
 PowerShell, dentro de `server/`, após configurar banco e segredo:
@@ -227,7 +278,7 @@ Remove-Item Env:\TEST_DATABASE_URL
 pnpm test
 ```
 
-`test:integration` exige a variável, aplica migrations com Prisma e roda em sequência o upgrade de contas legadas, autenticação e agenda com Express + Prisma + PostgreSQL. Não execute as suítes destrutivas de integração em paralelo no mesmo banco. Sem `TEST_DATABASE_URL`, `pnpm test` pula explicitamente essa suíte. Os testes PGlite são testes embarcados de SQL e não substituem a integração real. Os testes de produção verificam flags de cookies, claims JWT e sanitização de erros sem conectar a banco de produção.
+`test:integration` exige a variável, aplica migrations com Prisma e roda em sequência o upgrade de contas legadas, autenticação e agenda com Express + Prisma + PostgreSQL. As suítes destrutivas de integração apagam dados das mesmas tabelas, então `pnpm test` roda os arquivos em série (`--test-concurrency=1`); em paralelo elas derrubariam os registros umas das outras. Sem `TEST_DATABASE_URL`, `pnpm test` pula explicitamente essa suíte. Os testes PGlite são testes embarcados de SQL e não substituem a integração real. Os testes de produção verificam flags de cookies, claims JWT e sanitização de erros sem conectar a banco de produção.
 
 A implantação, o bootstrap em produção e o rollback estão documentados em [docs/deployment.md](docs/deployment.md). O relatório histórico da fundação permanece em [security_best_practices_report.md](security_best_practices_report.md).
 

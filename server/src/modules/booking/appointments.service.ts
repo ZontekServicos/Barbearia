@@ -6,7 +6,6 @@ import {
   addDaysToShopDate,
   clockToMinutes,
   instantToShopDate,
-  intervalsOverlap,
   shopWallClockToInstant,
 } from "../../utils/time.js"
 import type { AppointmentStatus } from "../../generated/prisma/enums.js"
@@ -19,6 +18,13 @@ import {
 import { BookingRules } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { findBlocksOverlapping, getDayWindow } from "./schedule.service.js"
+import {
+  blockedRange,
+  fitsInAnyWindow,
+  isStartOnSlotGrid,
+  overlaps,
+  windowsFromBusinessHours,
+} from "./availability.engine.js"
 
 /** Violação da EXCLUDE constraint de sobreposição (SQLSTATE 23P01). */
 function isOverlapViolation(error: unknown): boolean {
@@ -77,32 +83,54 @@ export async function createAppointment(
     )
   }
 
-  // Expediente.
-  const window = await getDayWindow(input.date)
-  if (!window) {
+  // Expediente. A mesma engine que lista os horários decide se este cabe —
+  // duas implementações paralelas divergiriam, e a divergência apareceria
+  // para o cliente como "o horário aparecia livre mas foi recusado".
+  const day = await getDayWindow(input.date)
+  if (!day) {
     throw AppError.badRequest(ErrorCodes.CONFLICT, "A barbearia está fechada nesta data.")
   }
 
-  const endMinute = startMinute + service.durationMinutes
-  if (startMinute < window.openMinute || endMinute > window.closeMinute) {
+  const windows = windowsFromBusinessHours(day)
+  if (!fitsInAnyWindow(windows, startMinute, service.durationMinutes)) {
     throw AppError.badRequest(
       ErrorCodes.CONFLICT,
       "Horário fora do expediente para a duração deste serviço.",
     )
   }
 
-  if (
-    window.breakStartMinute !== null &&
-    window.breakEndMinute !== null &&
-    startMinute < window.breakEndMinute &&
-    window.breakStartMinute < endMinute
-  ) {
-    throw AppError.badRequest(ErrorCodes.CONFLICT, "Esse horário cai no intervalo da barbearia.")
+  if (!isStartOnSlotGrid(windows, startMinute, BookingRules.slotIntervalMinutes)) {
+    throw AppError.badRequest(
+      ErrorCodes.VALIDATION_ERROR,
+      "Escolha um dos horários oferecidos na disponibilidade.",
+    )
   }
 
-  // Bloqueios administrativos.
-  const blocks = await findBlocksOverlapping(startsAt, endsAt)
-  if (blocks.some(block => intervalsOverlap(startsAt, endsAt, block.startsAt, block.endsAt))) {
+  // Bloqueios administrativos, comparados já com os buffers do serviço.
+  const candidate = blockedRange(
+    startMinute,
+    service.durationMinutes,
+    service.bufferBeforeMinutes,
+    service.bufferAfterMinutes,
+  )
+  const dayStart = shopWallClockToInstant(input.date, 0)
+  const toMinutes = (instant: Date) =>
+    (instant.getTime() - dayStart.getTime()) / 60_000
+
+  const blocks = await findBlocksOverlapping(
+    new Date(dayStart.getTime() + candidate.startMinute * 60_000),
+    new Date(dayStart.getTime() + candidate.endMinute * 60_000),
+  )
+  if (
+    blocks.some(block =>
+      overlaps(
+        candidate.startMinute,
+        candidate.endMinute,
+        toMinutes(block.startsAt),
+        toMinutes(block.endsAt),
+      ),
+    )
+  ) {
     throw AppError.conflict(ErrorCodes.CONFLICT, "Esse horário está bloqueado na agenda.")
   }
 
@@ -118,6 +146,8 @@ export async function createAppointment(
         // Congelados: mudar o preço do serviço depois não reescreve esta reserva.
         serviceName: service.name,
         servicePriceCents: service.priceCents,
+        bufferBeforeMinutes: service.bufferBeforeMinutes,
+        bufferAfterMinutes: service.bufferAfterMinutes,
       },
     })
 

@@ -113,3 +113,31 @@ describe("intervalsOverlap", () => {
     assert.equal(intervalsOverlap(at(9), at(10), at(14), at(15)), false)
   })
 })
+
+
+describe("fronteira UTC nas duas bordas do dia", () => {
+  it("minutos negativos e além do dia atravessam a meia-noite local", () => {
+    const cases: Array<[number, string, string, number]> = [
+      [-1, "2026-09-22T02:59:00.000Z", "2026-09-21", 1439],
+      [0, "2026-09-22T03:00:00.000Z", "2026-09-22", 0],
+      [1439, "2026-09-23T02:59:00.000Z", "2026-09-22", 1439],
+      [1440, "2026-09-23T03:00:00.000Z", "2026-09-23", 0],
+      [1441, "2026-09-23T03:01:00.000Z", "2026-09-23", 1],
+    ]
+    for (const [minute, expectedUtc, expectedDay, expectedMinute] of cases) {
+      const instant = shopWallClockToInstant("2026-09-22", minute)
+      assert.equal(instant.toISOString(), expectedUtc)
+      assert.equal(instantToShopDate(instant), expectedDay)
+      assert.equal(instantToShopMinutes(instant), expectedMinute)
+    }
+  })
+
+  it("preserva o dia local um milissegundo antes e depois da meia-noite", () => {
+    const before = new Date("2026-09-23T02:59:59.999Z")
+    const after = new Date("2026-09-23T03:00:00.001Z")
+    assert.equal(instantToShopDate(before), "2026-09-22")
+    assert.equal(instantToShopMinutes(before), 1439)
+    assert.equal(instantToShopDate(after), "2026-09-23")
+    assert.equal(instantToShopMinutes(after), 0)
+  })
+})

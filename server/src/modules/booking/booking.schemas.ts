@@ -1,10 +1,19 @@
 import { z } from "zod"
+import { parseShopDate } from "../../utils/time.js"
 
 /** Data no calendário da barbearia. A conversão para instante é do servidor. */
 export const shopDateSchema = z
   .string()
   .trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Use o formato AAAA-MM-DD.")
+  .refine(value => {
+    try {
+      parseShopDate(value)
+      return true
+    } catch {
+      return false
+    }
+  }, "Data inexistente no calendário.")
 
 const clockSchema = z
   .string()
@@ -19,9 +28,9 @@ export const uuidParamSchema = z.object({
 // Serviços
 // ---------------------------------------------------------------------------
 
-export const createServiceSchema = z.object({
+const serviceSchema = z.strictObject({
   name: z.string().trim().min(2, "Informe o nome do serviço.").max(80),
-  description: z.string().trim().max(240).default(""),
+  description: z.string().trim().max(240),
   /** Dinheiro em centavos: inteiro, nunca float. */
   priceCents: z
     .number()
@@ -33,11 +42,18 @@ export const createServiceSchema = z.object({
     .int()
     .positive("A duração deve ser maior que zero.")
     .max(480, "Duração acima do limite (8 horas)."),
-  active: z.boolean().default(true),
+  active: z.boolean(),
+})
+
+export const createServiceSchema = serviceSchema.extend({
+  description: serviceSchema.shape.description.default(""),
+  active: serviceSchema.shape.active.default(true),
 })
 
 /** Atualização parcial, mas sem permitir objeto vazio. */
-export const updateServiceSchema = createServiceSchema.partial().refine(
+// Defaults da criação não podem reativar um serviço nem apagar sua descrição
+// quando um PATCH altera somente preço ou duração.
+export const updateServiceSchema = serviceSchema.partial().refine(
   value => Object.keys(value).length > 0,
   "Informe ao menos um campo para atualizar.",
 )

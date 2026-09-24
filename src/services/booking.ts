@@ -32,8 +32,13 @@ export interface Availability {
   date: string
   serviceId: string
   serviceName: string
+  /** Duração real do serviço, vinda do banco. O frontend nunca a calcula. */
   durationMinutes: number
+  /** Grade de início usada pelo servidor. Útil para conferir qual build está no ar. */
+  slotIntervalMinutes: number
   open: boolean
+  /** Janelas de atendimento do dia, ex.: 09:00–12:00 e 14:00–20:00. */
+  windows: Array<{ opensAt: string; closesAt: string }>
   slots: AvailableSlot[]
   reason: "CLOSED" | "PAST_DATE" | "TOO_FAR" | "FULLY_BOOKED" | null
 }

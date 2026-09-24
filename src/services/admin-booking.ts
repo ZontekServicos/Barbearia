@@ -82,6 +82,7 @@ export async function listAgenda(
   from: string,
   to?: string,
   status?: AppointmentStatus,
+  signal?: AbortSignal,
 ): Promise<AdminAppointment[]> {
   const query = new URLSearchParams({ from })
   if (to) query.set("to", to)
@@ -89,6 +90,7 @@ export async function listAgenda(
 
   const data = await apiRequest<{ appointments: AdminAppointment[] }>(
     `/admin/agenda?${query.toString()}`,
+    { signal },
   )
   return data.appointments
 }

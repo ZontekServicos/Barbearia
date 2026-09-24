@@ -82,6 +82,10 @@ model Service {
   /// Dinheiro em centavos: inteiro exato, sem ponto flutuante.
   priceCents      Int      @map("price_cents")
   durationMinutes Int      @map("duration_minutes")
+  /// Reservados para preparação/limpeza futuras. CHECK no PostgreSQL exige 0
+  /// até que a exclusão cubra também os buffers. API/UI não os configuram.
+  bufferBeforeMinutes Int  @default(0) @map("buffer_before_minutes")
+  bufferAfterMinutes  Int  @default(0) @map("buffer_after_minutes")
   active          Boolean  @default(true)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -148,6 +152,10 @@ model Appointment {
   /// pode reescrever o histórico de quem já agendou.
   serviceName       String @map("service_name") @db.VarChar(80)
   servicePriceCents Int    @map("service_price_cents")
+  /// Buffers congelados junto com nome e preço: mudar a configuração do
+  /// serviço depois não pode reescrever o espaço que esta reserva ocupa.
+  bufferBeforeMinutes Int  @default(0) @map("buffer_before_minutes")
+  bufferAfterMinutes  Int  @default(0) @map("buffer_after_minutes")
 
   cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)

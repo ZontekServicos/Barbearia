@@ -65,5 +65,11 @@ export async function getBookableService(id: string) {
     throw AppError.notFound(ErrorCodes.NOT_FOUND, "Serviço indisponível.")
   }
 
+  // A EXCLUDE protege apenas [starts_at, ends_at). Até a ocupação com buffer
+  // ser protegida pelo banco, nenhuma reserva pode usar buffers não-zero.
+  if (service.bufferBeforeMinutes !== 0 || service.bufferAfterMinutes !== 0) {
+    throw AppError.conflict(ErrorCodes.CONFLICT, "Serviço indisponível para agendamento.")
+  }
+
   return service
 }

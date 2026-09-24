@@ -278,13 +278,13 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
               </button>
             </div>
 
-            <div className="grid grid-cols-7 mb-2">
+            <div className="grid grid-cols-7 gap-px sm:gap-0.5 -mx-3 sm:mx-0 mb-2">
               {weekDays.map(d => (
                 <div key={d} className="text-center text-xs text-[var(--muted-foreground)] font-medium py-1">{d}</div>
               ))}
             </div>
 
-            <div className="grid grid-cols-7 gap-0.5">
+            <div className="grid grid-cols-7 gap-px sm:gap-0.5 -mx-3 sm:mx-0">
               {Array.from({ length: firstDayOfWeek }).map((_, i) => (
                 <div key={`empty-${i}`} />
               ))}
@@ -300,7 +300,7 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
                     disabled={disabled}
                     onClick={() => setSelected(day)}
                     className={cn(
-                      'aspect-square flex items-center justify-center text-sm rounded-lg transition-all',
+                      'aspect-square min-h-11 flex items-center justify-center text-sm rounded-lg transition-all',
                       sel && 'bg-[var(--primary)] text-black font-bold',
                       !sel && todayDay && 'border border-[var(--primary)]/50 text-[var(--primary)]',
                       !sel && !disabled && !todayDay && 'hover:bg-[var(--primary)]/10 text-[var(--foreground)]',
@@ -325,6 +325,30 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
       )}
     </div>
   )
+}
+
+/**
+ * Agrupa os horários em manhã, tarde e noite.
+ *
+ * Com grade de 15 minutos um dia cheio passa de 30 opções; em tela de celular
+ * isso vira uma parede de números. Os cortes seguem o uso comum no Brasil e
+ * períodos vazios simplesmente não aparecem.
+ */
+function groupByPeriod(slots: AvailableSlot[]) {
+  const periods: Array<{ label: string; until: number; entries: AvailableSlot[] }> = [
+    { label: 'Manhã', until: 12 * 60, entries: [] },
+    { label: 'Tarde', until: 18 * 60, entries: [] },
+    { label: 'Noite', until: 24 * 60, entries: [] },
+  ]
+
+  for (const slot of slots) {
+    const [hour, minute] = slot.startsAtClock.split(':').map(Number)
+    const total = hour! * 60 + minute!
+    const period = periods.find(entry => total < entry.until) ?? periods[periods.length - 1]!
+    period.entries.push(slot)
+  }
+
+  return periods.filter(period => period.entries.length > 0)
 }
 
 /** Motivos que o backend devolve quando não há horários. */
@@ -375,7 +399,7 @@ function TimeStep({
         <div>
           <h2 className="text-xl font-bold tracking-tight">Escolha o horário</h2>
           <p className="text-sm text-[var(--muted-foreground)]">
-            {format(date, "EEEE, dd 'de' MMMM", { locale: ptBR })}
+            {format(date, "EEEE, dd 'de' MMMM", { locale: ptBR })} · {service.durationMinutes} min
           </p>
         </div>
       </div>
@@ -396,25 +420,34 @@ function TimeStep({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mb-6">
-            {slots.map(slot => {
-              const isSelected = selected === slot.startsAtClock
-              return (
-                <button
-                  key={slot.startsAtClock}
-                  aria-pressed={isSelected}
-                  onClick={() => setSelected(slot.startsAtClock)}
-                  className={cn(
-                    'py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
-                    isSelected
-                      ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
-                      : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]'
-                  )}
-                >
-                  {slot.startsAtClock}
-                </button>
-              )
-            })}
+          <div className="space-y-5 mb-6">
+            {groupByPeriod(slots).map(({ label, entries }) => (
+              <div key={label}>
+                <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-2.5">
+                  {label}
+                </h3>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+                  {entries.map(slot => {
+                    const isSelected = selected === slot.startsAtClock
+                    return (
+                      <button
+                        key={slot.startsAtClock}
+                        aria-pressed={isSelected}
+                        onClick={() => setSelected(slot.startsAtClock)}
+                        className={cn(
+                          'min-h-12 py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
+                          isSelected
+                            ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
+                            : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]'
+                        )}
+                      >
+                        {slot.startsAtClock}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
 
           <Button
@@ -724,7 +757,21 @@ export default function Schedule() {
       )}
 
       {step === 'service' && (
-        <ServiceStep onSelect={s => { setService(s); setNotice(null); setStep('date') }} />
+        <ServiceStep
+          onSelect={s => {
+            // Trocar o serviço invalida o horário escolhido: um intervalo que
+            // comportava 30 min pode não comportar 50. Guardá-lo em silêncio
+            // levaria o cliente a confirmar algo que o backend vai recusar.
+            if (service && service.id !== s.id && slot) {
+              setSlot(null)
+              setNotice('O horário foi limpo porque a duração do serviço mudou.')
+            } else {
+              setNotice(null)
+            }
+            setService(s)
+            setStep('date')
+          }}
+        />
       )}
       {step === 'date' && (
         <DateStep onSelect={d => { setDate(d); setStep('time') }} onBack={() => setStep('service')} />
