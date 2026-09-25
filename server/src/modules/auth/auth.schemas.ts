@@ -1,33 +1,11 @@
 import { z } from "zod"
-import { isValidPhone, normalizePhone } from "../../utils/phone.js"
+import { fullNameSchema, phoneSchema } from "../shared/contact.schemas.js"
+
+export { fullNameSchema, phoneSchema }
 import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
 } from "./password.service.js"
-
-/** Telefone: valida e já entrega normalizado em E.164 para as camadas de baixo. */
-export const phoneSchema = z
-  .string()
-  .trim()
-  .min(8, "Informe um telefone válido.")
-  .max(24, "Telefone muito longo.")
-  .refine(
-    isValidPhone,
-    "Informe um celular válido com DDD, ex.: (71) 99999-9999.",
-  )
-  .transform(normalizePhone)
-
-/**
- * Nome: espaços internos colapsados e bordas removidas, então "  João   Silva "
- * e "João Silva" viram o mesmo registro. Só espaços vira string vazia e é
- * recusado pelo tamanho mínimo.
- */
-export const fullNameSchema = z
-  .string()
-  .trim()
-  .transform((value) => value.replace(/\s+/g, " "))
-  .refine((value) => value.length >= 2, "Informe seu nome completo.")
-  .refine((value) => value.length <= 120, "Nome muito longo.")
 
 /**
  * Senha nova. Sem `trim`: espaço no começo ou no fim é parte da senha e

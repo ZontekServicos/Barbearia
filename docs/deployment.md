@@ -98,3 +98,21 @@ Se o novo deploy falhar, manter o serviço indisponível para autenticação pú
 Um rollback para OTP exige uma combinação revisada de frontend/backend/schema: recriação da estrutura OTP **vazia** conforme o histórico, preservação de usuários, senhas e agendamentos, reconciliação explícita do histórico Prisma e credenciais Twilio adequadas em ambiente seguro. Campos novos podem permanecer sem uso pelo runtime antigo. Alternativamente, restaurar backup aprovado e ensaiado, com invalidação de sessões/desafios restaurados antes de liberar tráfego. Nunca usar `migrate reset`.
 
 A versão anterior `101d9d5` não contém o domínio de agenda desta entrega: incluir isso na escolha da versão e no plano de preservação dos dados. O rollback de produção não é automático e não foi executado nesta etapa.
+
+## Upgrade do agendamento público (20260925100000)
+
+Esta versão mantém login administrativo por senha e adiciona pedidos públicos sem autenticar o telefone. O frontend requer `VITE_API_URL` correto; backend mantém `DATABASE_URL`, `JWT_ACCESS_SECRET`, `FRONTEND_URL`, `NODE_ENV=production`, `PORT` e configuração de cookies/proxy existentes. Não há variável Twilio/OTP nova. Não alterar a política `publicRequestsRequireApproval=true` sem nova revisão.
+
+O upgrade preenche `reserved_ends_at = ends_at` no histórico, instala CHECK, índice UNIQUE para o digest do token e EXCLUDE de `[starts_at,reserved_ends_at)` para PENDING/CONFIRMED. Não aumenta reservas antigas para 40 minutos. Buffers permanecem bloqueados por CHECK e schemas; ativá-los futuramente exige definir antes/depois, evitar contagem duplicada, migrar constraints/snapshots e testar todas as janelas e concorrência novamente.
+
+Há duas transações: novos valores do enum precisam estar commitados antes de serem utilizados; a segunda engloba colunas, preenchimento e substituição da constraint. Falha na segunda faz rollback desse DDL, mas os valores do enum já adicionados permanecem. Não editar migrations aplicadas nem executar reset/resolve às cegas.
+
+ALTER TABLE e reconstrução da EXCLUDE exigem locks que podem bloquear leituras/escritas até o commit. O ensaio local com fixture pequena mediu dezenas de milissegundos após adquirir o lock; sob um leitor concorrente, `lock_timeout=300ms` falhou como esperado, sem DDL parcial. Isso não estima duração em produção: volume e transações abertas determinam o bloqueio. Ver [locks do PostgreSQL](https://www.postgresql.org/docs/current/explicit-locking.html).
+
+O [pré-deploy do Railway](https://docs.railway.com/deployments/pre-deploy-command) executa antes do novo runtime. A versão antiga não escreve o novo campo NOT NULL; portanto existe janela de incompatibilidade de escrita entre migration e troca de aplicação. Planejar janela operacional, backup/PITR, drenagem de escritas e acompanhamento do lock antes de liberar tráfego. Não fazer rollback isolado da imagem antiga: ela não entende o novo campo obrigatório e os estados novos. A estratégia de rollback precisa ser coordenada com banco e preservação dos pedidos criados após o corte.
+
+Após o auto-deploy, conferir SHA, migrations e constraint reais, catálogo/expediente, jornada anônima PENDING, confirmação/recusa administrativa, expiração, concorrência, CORS HTTPS e cookies do admin. Configurar `TRUST_PROXY_HOPS` somente conforme topologia verificada, sem aceitar caminhos diretos que permitam forjar X-Forwarded-For. O limitador por IP é local à réplica; a cota por telefone é transacional e compartilhada no PostgreSQL.
+
+Não registrar `/booking/requests/:token` em access logs, analytics ou APM sem mascarar o token. A sanitização da aplicação não cobre a infraestrutura. A criação por telefone não prova titularidade; a barbearia deve avaliar pedidos antes da confirmação. Não há envio de SMS nem notificação automática neste fluxo.
+
+Esta auditoria usa somente PostgreSQL local isolado. Push dispara a automação já existente, mas não comprova deploy, migration ou comportamento no Railway. Esses itens permanecem pendentes de validação separada.

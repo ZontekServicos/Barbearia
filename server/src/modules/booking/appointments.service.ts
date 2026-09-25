@@ -1,3 +1,4 @@
+import { isOverlapViolation } from "./booking-conflict.js"
 import { prisma } from "../../config/prisma.js"
 import { AppError, ErrorCodes } from "../../utils/errors.js"
 import { logger } from "../../utils/logger.js"
@@ -15,26 +16,24 @@ import {
   type AdminAppointment,
   type PublicAppointment,
 } from "./booking.mapper.js"
-import { BookingRules } from "./booking.rules.js"
+import { BookingRules, reservedMinutesFor } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
-import { findBlocksOverlapping, getDayWindow } from "./schedule.service.js"
-import {
-  blockedRange,
-  fitsInAnyWindow,
-  isStartOnSlotGrid,
-  overlaps,
-  windowsFromBusinessHours,
-} from "./availability.engine.js"
+import { listBookableStartMinutes } from "./availability.service.js"
+import { fitsInAnyWindow, windowsFromBusinessHours } from "./availability.engine.js"
+import { getDayWindow } from "./schedule.service.js"
+import type { Prisma } from "../../generated/prisma/client.js"
+import { lockUser } from "../../utils/locks.js"
+import { generatePublicToken, digestPublicToken } from "./public-token.js"
 
-/** Violação da EXCLUDE constraint de sobreposição (SQLSTATE 23P01). */
-function isOverlapViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false
-  const candidate = error as { code?: string; meta?: { constraint?: unknown }; message?: string }
-  if (candidate.code === "23P01") return true
-  const constraint = candidate.meta?.constraint
-  if (typeof constraint === "string" && constraint.includes("appointments_no_overlap")) return true
-  return typeof candidate.message === "string" && candidate.message.includes("appointments_no_overlap")
-}
+/**
+ * Perda de corrida ao gravar.
+ *
+ * 23P01 é a violação da EXCLUDE. 40P01 (deadlock) aparece quando várias
+ * transações disputam o mesmo intervalo e o PostgreSQL resolve o impasse
+ * abortando uma delas — do ponto de vista de quem pediu, é o mesmo caso: o
+ * horário foi para outra pessoa. Tratar como 500 puniria o cliente por uma
+ * condição de corrida normal.
+ */
 
 export interface CreateAppointmentInput {
   userId: string
@@ -45,36 +44,61 @@ export interface CreateAppointmentInput {
 }
 
 /**
+ * Como a reserva nasce.
+ *
+ *   SESSION — cliente autenticado ou administração: já nasce CONFIRMED.
+ *   PUBLIC  — solicitação sem login vinda da landing. Nasce PENDING quando a
+ *             barbearia exige aprovação (ver BookingRules), e recebe um token
+ *             para a pessoa acompanhar o próprio pedido sem criar conta.
+ */
+export type AppointmentOrigin = "SESSION" | "PUBLIC"
+
+export interface PlacedAppointment {
+  appointment: PublicAppointment
+  /** Só existe em solicitação pública. Entregue uma única vez. */
+  publicToken?: string
+}
+
+
+/**
  * Cria um agendamento.
  *
- * Nada de duração, preço ou horário final vem do cliente: o servidor lê o
- * serviço no banco e calcula. O cliente informa apenas o que quer e quando
- * começa.
+ * Nada de duração, preço, fim ou status vem do cliente: o servidor lê o
+ * serviço no banco e calcula tudo. O cliente informa apenas o que quer e
+ * quando começa.
  *
- * As validações abaixo dão mensagens boas ao usuário, mas a garantia dura
- * contra reserva dupla é a EXCLUDE constraint do PostgreSQL — ela é o que
- * segura duas requisições simultâneas pedindo o mesmo horário.
+ * A validação do horário é feita por PARTICIPAÇÃO na lista de inícios que a
+ * agenda realmente oferece, em vez de repetir as regras aqui. Duas
+ * implementações paralelas divergiriam com o tempo, e a divergência apareceria
+ * como "o horário aparecia livre mas foi recusado". Essa checagem cobre
+ * expediente, almoço, bloqueios, ocupação, antecedência, grade e reancoragem.
+ *
+ * As validações dão mensagens boas; a garantia dura contra reserva dupla é a
+ * EXCLUDE constraint do PostgreSQL, que protege o intervalo OPERACIONAL
+ * (`starts_at` .. `reserved_ends_at`) e inclui as solicitações pendentes.
  */
 export async function createAppointment(
   input: CreateAppointmentInput,
   now: Date = new Date(),
-): Promise<PublicAppointment> {
+  origin: AppointmentOrigin = "SESSION",
+  beforeInsert?: (tx: Prisma.TransactionClient) => Promise<string>,
+): Promise<PlacedAppointment> {
   const service = await getBookableService(input.serviceId)
 
   const startMinute = clockToMinutes(input.startsAt)
   const startsAt = shopWallClockToInstant(input.date, startMinute)
   const endsAt = new Date(startsAt.getTime() + service.durationMinutes * 60_000)
 
-  // Antecedência mínima.
-  const earliest = new Date(now.getTime() + BookingRules.minimumAdvanceMinutes * 60_000)
-  if (startsAt.getTime() < earliest.getTime()) {
-    throw AppError.badRequest(
-      ErrorCodes.VALIDATION_ERROR,
-      `Agende com pelo menos ${BookingRules.minimumAdvanceMinutes} minutos de antecedência.`,
-    )
-  }
+  // Reserva operacional: pode ser maior que o atendimento. É ela que a agenda
+  // bloqueia; `endsAt` continua sendo o que o cliente vê.
+  const reservedMinutes = reservedMinutesFor(
+    service.durationMinutes,
+    service.bufferBeforeMinutes,
+    service.bufferAfterMinutes,
+  )
+  const reservedEndsAt = new Date(startsAt.getTime() + reservedMinutes * 60_000)
 
-  // Antecedência máxima.
+  // Antecedência máxima antes de qualquer consulta pesada.
   const lastBookableDate = addDaysToShopDate(instantToShopDate(now), BookingRules.maximumAdvanceDays)
   if (input.date > lastBookableDate) {
     throw AppError.badRequest(
@@ -83,75 +107,87 @@ export async function createAppointment(
     )
   }
 
-  // Expediente. A mesma engine que lista os horários decide se este cabe —
-  // duas implementações paralelas divergiriam, e a divergência apareceria
-  // para o cliente como "o horário aparecia livre mas foi recusado".
+  // As checagens abaixo existem pela MENSAGEM. A decisão final é a
+  // participação na lista oferecida, logo adiante — mas "esse horário não está
+  // disponível" não ajuda quem tentou agendar às 22h ou num domingo. Cada uma
+  // devolve o motivo real.
+  const earliest = new Date(now.getTime() + BookingRules.minimumAdvanceMinutes * 60_000)
+  if (startsAt.getTime() < earliest.getTime()) {
+    throw AppError.badRequest(
+      ErrorCodes.VALIDATION_ERROR,
+      `Agende com pelo menos ${BookingRules.minimumAdvanceMinutes} minutos de antecedência.`,
+    )
+  }
+
   const day = await getDayWindow(input.date)
   if (!day) {
     throw AppError.badRequest(ErrorCodes.CONFLICT, "A barbearia está fechada nesta data.")
   }
 
-  const windows = windowsFromBusinessHours(day)
-  if (!fitsInAnyWindow(windows, startMinute, service.durationMinutes)) {
+  if (!fitsInAnyWindow(windowsFromBusinessHours(day), startMinute, reservedMinutes)) {
     throw AppError.badRequest(
       ErrorCodes.CONFLICT,
       "Horário fora do expediente para a duração deste serviço.",
     )
   }
 
-  if (!isStartOnSlotGrid(windows, startMinute, BookingRules.slotIntervalMinutes)) {
-    throw AppError.badRequest(
-      ErrorCodes.VALIDATION_ERROR,
-      "Escolha um dos horários oferecidos na disponibilidade.",
+  const offered = await listBookableStartMinutes(input.date, service.id, now)
+  if (!offered.includes(startMinute)) {
+    throw AppError.conflict(
+      ErrorCodes.CONFLICT,
+      "Esse horário não está mais disponível. Escolha outro.",
     )
   }
 
-  // Bloqueios administrativos, comparados já com os buffers do serviço.
-  const candidate = blockedRange(
-    startMinute,
-    service.durationMinutes,
-    service.bufferBeforeMinutes,
-    service.bufferAfterMinutes,
-  )
-  const dayStart = shopWallClockToInstant(input.date, 0)
-  const toMinutes = (instant: Date) =>
-    (instant.getTime() - dayStart.getTime()) / 60_000
-
-  const blocks = await findBlocksOverlapping(
-    new Date(dayStart.getTime() + candidate.startMinute * 60_000),
-    new Date(dayStart.getTime() + candidate.endMinute * 60_000),
-  )
-  if (
-    blocks.some(block =>
-      overlaps(
-        candidate.startMinute,
-        candidate.endMinute,
-        toMinutes(block.startsAt),
-        toMinutes(block.endsAt),
-      ),
-    )
-  ) {
-    throw AppError.conflict(ErrorCodes.CONFLICT, "Esse horário está bloqueado na agenda.")
-  }
+  const requiresApproval =
+    origin === "PUBLIC" && BookingRules.publicRequestsRequireApproval
+  const publicToken = origin === "PUBLIC" ? generatePublicToken() : undefined
 
   try {
-    const appointment = await prisma.appointment.create({
+    const appointment = await prisma.$transaction(async tx => {
+      const userId = beforeInsert ? await beforeInsert(tx) : input.userId;
+      // Solicitações pendentes vencidas que cobrem este intervalo são
+      // liberadas AQUI, na mesma transação do insert e restritas ao período
+      // em disputa. Assim a EXCLUDE não recusa a reserva por causa de um
+      // pedido abandonado, sem precisar de varredura global no caminho de
+      // leitura — que era o que gerava disputa de lock.
+      await tx.appointment.updateMany({
+        where: {
+          status: "PENDING",
+          pendingExpiresAt: { lte: now },
+          startsAt: { lt: reservedEndsAt },
+          reservedEndsAt: { gt: startsAt },
+        },
+        data: { status: "EXPIRED", decidedAt: now },
+      })
+
+      return tx.appointment.create({
       data: {
-        userId: input.userId,
+        userId,
         serviceId: service.id,
         startsAt,
         endsAt,
-        status: "CONFIRMED",
+        reservedEndsAt,
+        status: requiresApproval ? "PENDING" : "CONFIRMED",
         notes: input.notes ?? null,
-        // Congelados: mudar o preço do serviço depois não reescreve esta reserva.
+        // Congelados: mudar o serviço depois não reescreve esta reserva.
         serviceName: service.name,
         servicePriceCents: service.priceCents,
         bufferBeforeMinutes: service.bufferBeforeMinutes,
         bufferAfterMinutes: service.bufferAfterMinutes,
-      },
+        ...(publicToken ? { publicToken: digestPublicToken(publicToken) } : {}),
+        ...(requiresApproval
+          ? {
+              pendingExpiresAt: new Date(
+                now.getTime() + BookingRules.pendingRequestTtlMinutes * 60_000,
+              ),
+            }
+          : {}),
+        },
+      })
     })
 
-    return toPublicAppointment(appointment)
+    return { appointment: toPublicAppointment(appointment), publicToken }
   } catch (error) {
     if (isOverlapViolation(error)) {
       logger.info("Reserva recusada por conflito de horário", { serviceId: service.id })
@@ -251,7 +287,11 @@ export async function listAgenda(
     where: {
       startsAt: { lt: rangeEnd },
       endsAt: { gt: rangeStart },
-      ...(status ? { status } : {}),
+      ...(status === "PENDING"
+        ? { status, pendingExpiresAt: { gt: new Date() } }
+        : status === "EXPIRED"
+          ? { OR: [{ status: "EXPIRED" as const }, { status: "PENDING" as const, pendingExpiresAt: { lte: new Date() } }] }
+          : status ? { status } : {}),
     },
     orderBy: { startsAt: "asc" },
     include: { user: { select: { id: true, fullName: true, phone: true } } },
@@ -368,4 +408,38 @@ export async function listCustomerAppointments(userId: string): Promise<PublicAp
     take: 200,
   })
   return appointments.map(toPublicAppointment)
+}
+
+/**
+ * Decisão do barbeiro sobre uma solicitação pública pendente.
+ *
+ * Confirmar não recria a reserva: o horário já estava segurado desde o pedido,
+ * e a EXCLUDE constraint inclui PENDING justamente para isso. O que muda é o
+ * estado e o fim do prazo — uma solicitação confirmada deixa de expirar.
+ *
+ * Recusar libera o horário na consulta seguinte, sem apagar o registro: o
+ * histórico de pedidos recusados continua visível para a barbearia.
+ */
+export async function decidePendingRequest(
+  actorId: string,
+  appointmentId: string,
+  decision: "CONFIRMED" | "REJECTED",
+  now?: Date,
+): Promise<AdminAppointment> {
+  await prisma.$transaction(async tx => {
+    await lockUser(tx, actorId)
+    const actor = await tx.user.findUnique({ where: { id: actorId } })
+    if (actor?.role !== "ADMIN" || actor.status !== "ACTIVE") throw AppError.forbidden()
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
+    const appointment = await tx.appointment.findUnique({where:{id:appointmentId}})
+    if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
+    const decidedAt = now ?? new Date()
+    if (appointment.status !== "PENDING" || !appointment.pendingExpiresAt || appointment.pendingExpiresAt <= decidedAt) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
+    }
+    await tx.appointment.update({where:{id:appointmentId},data:{status:decision,decidedAt,pendingExpiresAt:null,...(decision === "REJECTED" ? {cancelledAt:decidedAt} : {})}})
+    await tx.adminAuditLog.create({data:{actorId,targetUserId:appointment.userId,action: `APPOINTMENT_REQUEST_${decision}`,metadata:{appointmentId,from:"PENDING",to:decision}}})
+  })
+  logger.info("Solicitação de agendamento decidida", { actorId, appointmentId, to: decision })
+  return getAppointmentForAdmin(appointmentId)
 }

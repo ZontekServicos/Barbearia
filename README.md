@@ -146,21 +146,58 @@ Access JWT usa HS256, issuer, audience, expiração e identificador de sessão. 
 | ACTIVE | Sim | Sim | Sim | Somente ADMIN |
 | BLOCKED | Não | Não | Não | Não |
 
+A tabela acima pressupõe senha válida. Um contato com `passwordHash = null` nunca pode fazer login, mesmo que seu status seja ACTIVE.
+
 Apenas `fullName` é editável em `/users/me`. O administrador não pode alterar o próprio status. Alterações administrativas revalidam o ator dentro da transação e preservam pelo menos um admin ativo. Aprovação, bloqueio, reativação e redefinição de senha registram ator, alvo, ação e data — sem tokens, senhas ou hashes.
 
-## Agendar antes de ter conta
+## Agendamento público — sem conta, sem senha
 
-O fluxo público começa na landing e só pede identificação no fim:
+O cliente não cria conta para marcar um horário. O fluxo é:
 
 ```
-Landing -> Agendar horário -> serviço -> data -> horário -> login/cadastro -> confirmação
+Landing -> WhatsApp + nome -> serviço -> data -> horário -> revisar -> solicitar
 ```
 
-`GET /booking/services`, `/booking/business-hours` e `/booking/availability` são públicos. Disponibilidade entrou nessa lista com a migração: sem ela a pessoa teria de se cadastrar às cegas, sem saber se existe horário. O que sai é agregado e sem dado pessoal — apenas horários livres, a mesma informação que qualquer vitrine de agendamento exibe. Quem reservou o quê continua exigindo sessão.
+O telefone é pedido logo no começo e basta para iniciar. Não há senha, código por SMS, e-mail, login nem sessão em nenhum ponto do caminho. O telefone informado não comprova titularidade. O fluxo autoriza somente a criação de uma solicitação pendente; identidade e aprovação continuam sendo responsabilidades operacionais da barbearia.
 
-A seleção é guardada em `sessionStorage` (serviço, data, horário — nada pessoal, expira em 2 horas) e restaurada depois do login. **Preservar a seleção não reserva nada**: ao voltar, o frontend reconsulta a disponibilidade e, se o horário já tiver sido tomado, devolve a pessoa para a lista com um aviso. A criação da reserva continua exigindo conta `ACTIVE`, e a `EXCLUDE` constraint do PostgreSQL garante que duas pessoas nunca fiquem com o mesmo horário.
+**A administração continua exigindo telefone + senha.** Nenhuma rota `/admin` foi aberta.
 
-Cliente `PENDING` percorre o fluxo e vê a mensagem de cadastro em análise em vez de uma confirmação — a política de aprovação da barbearia não mudou, e quem a aplica é o backend.
+### O telefone não é credencial
+
+Informar um número não dá acesso a nada que pertença a ele:
+
+- não devolve histórico nem reservas anteriores;
+- não revela o nome cadastrado — um nome já existente nunca é sobrescrito, senão bastaria saber o telefone de alguém para renomear o cadastro dela;
+- não permite cancelar reserva de terceiro;
+- não abre sessão nem devolve token de acesso;
+- uma conta **ADMIN** que agenda com o próprio número continua ADMIN: o papel e o status de um registro existente nunca são alterados por um pedido público.
+
+A única chave para acompanhar um pedido é o `publicToken` devolvido na criação — 256 bits aleatórios, entregues uma vez. Ele abre **aquele** pedido e nada mais; não existe listagem pública.
+
+### Contato x conta
+
+Reaproveitamos a entidade `User`: um contato sem conta é um `User` com `passwordHash` nulo, semântica que o login já recusa desde a migração de senha. Isso mantém o agendamento, a tela administrativa de clientes e o histórico apontando para o mesmo registro, sem criar uma tabela paralela que precisaria ser reconciliada depois.
+
+### Aprovação — decisão de negócio
+
+A regra antiga era "o admin aprova o cliente antes do primeiro agendamento". Sem login não há conta para aprovar, então a regra foi **movida para o agendamento** em vez de descartada em silêncio. `BookingRules.publicRequestsRequireApproval` controla as duas políticas:
+
+| Valor | Reserva nasce | Botão | Tela final |
+| --- | --- | --- | --- |
+| `true` (atual) | `PENDING` | "Solicitar agendamento" | "Solicitação enviada" |
+| `false` | `CONFIRMED` | "Confirmar agendamento" | "Agendamento confirmado" |
+
+A configuração auditada é `true`; desativá-la exige revisão explícita de risco e novos gates. O frontend busca a política em `GET /booking/policy` — a regra vive num lugar só.
+
+Uma solicitação pendente **segura o horário** (a `EXCLUDE` inclui `PENDING`): oferecer o mesmo horário a outra pessoa criaria duas promessas para a mesma vaga. Para não travar a agenda indefinidamente ela expira em `pendingRequestTtlMinutes` (2h) e o horário volta a ser oferecido. A expiração acontece no momento em que alguém tenta reservar aquele intervalo, dentro da mesma transação do insert — não numa varredura a cada consulta, que competia por lock com quem estava reservando e chegava a produzir deadlock sob concorrência.
+
+Nunca dizemos "confirmado" enquanto o pedido depende do barbeiro.
+
+### Retomar ou recomeçar
+
+A seleção em andamento (serviço, data, horário) fica em `sessionStorage` por 2 horas. **Nenhum dado pessoal vai para o armazenamento** — telefone e nome ficam só em memória, e por isso a retomada volta pela etapa de contato.
+
+Ao abrir o agendamento com uma seleção guardada, a tela **oferece a escolha** — "Continuar agendamento" ou "Começar novo agendamento" — em vez de pular direto para a confirmação. O comportamento anterior prendia a pessoa no fim do fluxo: ela não conseguia trocar serviço nem horário. A intenção é apagada ao confirmar e ao recomeçar.
 
 ## Disponibilidade
 
@@ -169,18 +206,29 @@ Dois conceitos que o sistema mantém separados de propósito:
 | Conceito | O que é | Onde vive |
 | --- | --- | --- |
 | **Duração do serviço** | Quanto tempo o atendimento ocupa a cadeira | `Service.durationMinutes`, no banco |
-| **Intervalo de início** | De quanto em quanto tempo sugerimos um começo | `BookingRules.slotIntervalMinutes` = 15 |
+| **Reserva operacional** | O que a agenda bloqueia: `max(grade, duração + buffers)` | `reservedMinutesFor()` |
+| **Grade de início** | De quanto em quanto tempo sugerimos um começo | `BookingRules.baseSlotMinutes` = 40 |
 
-A grade de início é sempre de 15 em 15 minutos, igual para todo serviço. O que muda com a duração é **até onde** a grade vai, não o passo. Um horário só é oferecido quando o período inteiro necessário para aquele serviço está livre:
+A grade de início é de 40 em 40 minutos, igual para todo serviço — o barbeiro não quer dezenas de opções por dia. Com expediente 09:00–12:00 e 14:00–20:00 isso dá 13 inícios, bem abaixo do teto de `maxDailyStartOptions` (20). Quando a grade produz mais que o teto, a lista é reduzida por **amostragem espaçada**, preservando o primeiro e o último — nunca `slice`, que esconderia o fim do expediente. É limite de opções EXIBIDAS, não de reservas aceitas: a criação valida contra a lista completa.
+
+A duração real do serviço é sempre preservada. Um corte de 30 minutos **dura 30 minutos** e é assim que aparece para o cliente; o que ele ocupa na agenda é a reserva operacional de 40. Quando os dois diferem, a tela explica — nunca troca um pelo outro:
+
+| Serviço | Duração | Reserva |
+| --- | --- | --- |
+| Corte | 30 min | 40 min |
+| Corte + Barba | 40 min | 40 min |
+| Cabelo + Pigmentação | 45 min | 45 min |
+| Cabelo + Barba + Pigmentação | 50 min | 50 min |
+
+Um horário só é oferecido quando o período inteiro necessário está livre:
 
 ```
 Expediente 09:00–12:00 · reserva existente 09:30–10:10 · Corte de 30 min
 
-09:00 -> 09:00–09:30  livre
-09:15 -> 09:15–09:45  invade a reserva
-09:30 -> ocupado
-10:00 -> 10:00–10:30  invade até 10:10
-10:15 -> 10:15–10:45  livre
+09:00 -> reserva até 09:40: conflito
+09:40 -> conflito até 10:10
+10:10 -> candidato adaptativo: atendimento até 10:40, reserva até 10:50
+10:20 -> candidato da grade: atendimento até 10:50, reserva até 11:00
 ```
 
 A resposta de `/booking/availability` inclui `slotIntervalMinutes` e `windows`. É a forma mais rápida de conferir, pelo DevTools, qual grade o servidor que está no ar realmente usa — útil quando a tela e o código parecem discordar.
@@ -189,13 +237,15 @@ A resposta de `/booking/availability` inclui `slotIntervalMinutes` e `windows`. 
 
 O intervalo de almoço parte o dia em duas janelas (09:00–12:00 e 14:00–20:00) em vez de virar um período "ocupado". A diferença importa: como janela, ele reancora a grade — cada janela começa na própria abertura, inclusive quando o fim do almoço não coincide com a grade da manhã — e impede por construção que um atendimento o atravesse. Um serviço de 50 minutos às 11:30 terminaria 12:20 e por isso não é oferecido, mesmo havendo expediente à tarde.
 
+Com `adaptiveSchedulingEnabled`, além da grade fixa a engine oferece início no **fim de cada atendimento já marcado**. Um serviço de 50 min iniciado às 09:00 termina 09:50; sem a política o próximo início seria 10:20, com ela 09:50 também é oferecido — desde que todo o intervalo necessário esteja livre. São candidatos adicionais, submetidos às mesmas checagens, e o resultado é determinístico: mesma entrada, mesma lista, então dois clientes simultâneos veem o mesmo. Reservas existentes nunca são deslocadas; a política governa apenas a geração de horários novos.
+
 A engine (`availability.engine.ts`) é uma função pura sobre "minutos desde a meia-noite local": sem banco, sem relógio e sem fuso. A conversão de instantes fica em `availability.service.ts`, e o fuso continua centralizado em `utils/time.ts`.
 
 ### Ocupação
 
-Contam como ocupado os agendamentos `CONFIRMED` e os bloqueios administrativos — a engine trata os dois igual. `CANCELLED`, `NO_SHOW` e `COMPLETED` não bloqueiam, então cancelar libera o horário na consulta seguinte, sem reiniciar nada.
+Contam como ocupado os agendamentos `CONFIRMED`, os `PENDING` não expirados e os bloqueios administrativos — a engine trata os dois igual. `CANCELLED`, `NO_SHOW` e `COMPLETED` não bloqueiam, então cancelar libera o horário na consulta seguinte, sem reiniciar nada.
 
-Todo intervalo é semiaberto `[início, fim)`: um atendimento que termina 09:30 e outro que começa 09:30 não conflitam. A mesma regra vale no frontend, no backend e na `EXCLUDE` constraint do PostgreSQL (`tstzrange(starts_at, ends_at, '[)')`), que continua sendo a última linha de defesa contra reserva dupla.
+Todo intervalo é semiaberto `[início, fim)`: um atendimento que termina 09:30 e outro que começa 09:30 não conflitam. A mesma regra vale no frontend, no backend e na `EXCLUDE` do PostgreSQL, que protege o intervalo **operacional** — `tstzrange(starts_at, reserved_ends_at, '[)')` — e inclui `PENDING`. Proteger só a duração deixaria a reserva de 40 min de um corte de 30 desprotegida no banco.
 
 ### Buffers
 
@@ -290,3 +340,13 @@ A implantação, o bootstrap em produção e o rollback estão documentados em [
 - Logout sem conexão encerra o estado em memória, mas não garante a remoção do cookie httpOnly no servidor/navegador; uma recarga pode restaurar a sessão até que a revogação remota tenha sucesso.
 - Ainda não existe job de retenção para sessões expiradas. Defina manutenção antes de operação prolongada; não remova o histórico necessário à detecção de reuso de refresh token.
 - Configuração final de HTTPS, proxy, CORS e política de cookies precisa ser validada no ambiente de implantação. Nenhum deploy faz parte desta auditoria.
+
+### Limites de segurança do agendamento público
+
+O token contém 32 bytes aleatórios (43 caracteres base64url); somente seu SHA-256 é persistido. A consulta permite ler um único pedido, sem autenticar, alterar ou cancelar. A aplicação mascara tokens nos logs de erro e não os inclui nos serializers administrativos. Configure também logs de proxy/APM para ocultar o segmento `/booking/requests/:token`: o servidor não controla logs externos. Não envie esses caminhos a analytics.
+
+O navegador guarda somente o último token em localStorage, sem telefone/nome. É uma capacidade de leitura persistente: um XSS ou outra pessoa no mesmo perfil de navegador pode lê-la. Não há tela de acompanhamento nem notificação automática nesta entrega; a consulta existe na API.
+
+Novo contato, ADMIN e CUSTOMER recebem o mesmo formato de sucesso sem dados cadastrais. BLOCKED e limite de três pedidos recebem a mesma recusa neutra 409. Ela ainda difere do sucesso 201: existe inferência residual de elegibilidade, sem indicar tipo de conta ou motivo. Sem verificar posse, terceiros podem solicitar em nome de um telefone conhecido e consumir sua cota. Aprovação, expiração e limites reduzem abuso, mas não comprovam identidade. O limite por IP (10/15min) usa memória por processo; a cota por telefone usa transação PostgreSQL com lock e vale entre réplicas.
+
+A reserva operacional inteira precisa caber no expediente/almoço. O candidato adaptativo usa o fim reservado, arredondado para cima ao minuto. Pedidos vencidos aparecem EXPIRED sem escrita durante leitura; decisões administrativas revalidam prazo e status sob lock e registram uma única auditoria.

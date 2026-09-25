@@ -47,3 +47,21 @@ export const loginRateLimit = rateLimit({
 
 /** Limita tentativas da senha atual e redefinições privilegiadas. */
 export const passwordChangeRateLimit = rateLimit({ ...sharedOptions, windowMs: 15 * 60_000, limit: 10 })
+
+/**
+ * Solicitação pública de agendamento: não exige login, então o limite por IP é
+ * a primeira barreira contra flood. Complementa o limite durável por telefone
+ * aplicado em public-booking.service, que vale entre réplicas.
+ */
+export const publicBookingRateLimit = rateLimit({
+  ...sharedOptions,
+  windowMs: 15 * 60_000,
+  limit: 10,
+})
+
+/** Consulta do próprio pedido pelo token: leitura barata, limite generoso. */
+export const publicRequestLookupRateLimit = rateLimit({
+  ...sharedOptions,
+  windowMs: 15 * 60_000,
+  limit: 60,
+})

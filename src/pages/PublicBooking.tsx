@@ -11,8 +11,8 @@ import { useAuth } from "@/context/AuthContext"
  * cliente. Quem ainda não entrou vê a mesma atmosfera da marca sem a barra
  * inferior — ela leva a áreas protegidas que essa pessoa ainda não pode abrir.
  *
- * Nenhuma das duas cascas decide autorização: o backend recusa criar reserva
- * sem sessão e sem conta ACTIVE, independentemente do que esta tela mostre.
+ * As duas cascas usam a solicitação pública sem sessão. O backend mantém
+ * os recursos privados protegidos e exige decisão administrativa do pedido.
  */
 export default function PublicBooking() {
   const { status } = useAuth()

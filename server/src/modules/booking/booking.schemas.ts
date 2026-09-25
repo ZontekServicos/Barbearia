@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { parseShopDate } from "../../utils/time.js"
+import { fullNameSchema, phoneSchema } from "../shared/contact.schemas.js"
 
 /** Data no calendário da barbearia. A conversão para instante é do servidor. */
 export const shopDateSchema = z
@@ -163,7 +164,7 @@ export const adminAgendaQuerySchema = z
   .object({
     from: shopDateSchema,
     to: shopDateSchema.optional(),
-    status: z.enum(["CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW"]).optional(),
+    status: z.enum(["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED"]).optional(),
   })
   .transform(query => ({ ...query, to: query.to ?? query.from }))
   .refine(range => range.from <= range.to, {
@@ -178,4 +179,36 @@ export const adminAgendaQuerySchema = z
  */
 export const updateAppointmentStatusSchema = z.object({
   status: z.enum(["COMPLETED", "CANCELLED", "NO_SHOW"]),
+})
+
+// ---------------------------------------------------------------------------
+// Solicitação pública (sem login)
+// ---------------------------------------------------------------------------
+
+/**
+ * O que o navegador pode enviar numa solicitação pública.
+ *
+ * `strictObject`: qualquer campo extra — `userId`, `status`, `priceCents`,
+ * `durationMinutes`, `role` — é REJEITADO, não ignorado. Duração, preço, fim e
+ * status são decididos pelo servidor a partir do serviço no banco.
+ */
+export const publicBookingRequestSchema = z.strictObject({
+  phone: phoneSchema,
+  fullName: fullNameSchema,
+  serviceId: z.uuid("Serviço inválido."),
+  date: shopDateSchema,
+  startsAt: clockSchema,
+  notes: z.string().trim().max(280).optional(),
+})
+
+/** Token opaco de 256 bits em base64url. */
+export const publicTokenParamSchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{43}$/, "Solicitação não encontrada."),
+})
+
+export const decideRequestSchema = z.strictObject({
+  decision: z.enum(["CONFIRMED", "REJECTED"]),
 })

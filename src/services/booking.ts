@@ -1,6 +1,19 @@
 import { apiRequest } from "./api"
 
-export type AppointmentStatus = "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
+/**
+ * Estados de um agendamento.
+ *
+ * PENDING é a solicitação pública aguardando o barbeiro — ela já segura o
+ * horário. REJECTED e EXPIRED o liberam.
+ */
+export type AppointmentStatus =
+  | "PENDING"
+  | "CONFIRMED"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "NO_SHOW"
+  | "REJECTED"
+  | "EXPIRED"
 
 export interface Service {
   id: string
@@ -26,6 +39,8 @@ export interface AvailableSlot {
   endsAtClock: string
   startsAt: string
   endsAt: string
+  /** Minutos reservados na agenda. Pode exceder a duração do serviço. */
+  reservedMinutes: number
 }
 
 export interface Availability {
@@ -56,6 +71,8 @@ export interface Appointment {
   endsAtClock: string
   durationMinutes: number
   status: AppointmentStatus
+  /** Minutos reservados na agenda; pode exceder a duração do serviço. */
+  reservedMinutes: number
   notes: string | null
   createdAt: string
   cancelledAt: string | null
@@ -110,15 +127,21 @@ export async function cancelMyAppointment(id: string): Promise<Appointment> {
 
 /** Rótulos de status — fonte única para cliente e admin. */
 export const STATUS_LABEL: Record<AppointmentStatus, string> = {
+  PENDING: "Aguardando confirmação",
   CONFIRMED: "Confirmado",
   COMPLETED: "Concluído",
   CANCELLED: "Cancelado",
   NO_SHOW: "Não compareceu",
+  REJECTED: "Recusado",
+  EXPIRED: "Expirado",
 }
 
-export const STATUS_BADGE: Record<AppointmentStatus, "confirmed" | "completed" | "cancelled" | "missed"> = {
+export const STATUS_BADGE: Record<AppointmentStatus, "confirmed" | "completed" | "cancelled" | "missed" | "pending"> = {
+  PENDING: "pending",
   CONFIRMED: "confirmed",
   COMPLETED: "completed",
   CANCELLED: "cancelled",
   NO_SHOW: "missed",
+  REJECTED: "cancelled",
+  EXPIRED: "cancelled",
 }

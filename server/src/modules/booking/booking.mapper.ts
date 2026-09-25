@@ -109,7 +109,10 @@ export interface PublicAppointment {
   date: string
   startsAtClock: string
   endsAtClock: string
+  /** Duração real do serviço — o que o cliente compra e vê. */
   durationMinutes: number
+  /** Minutos que a agenda reservou. Pode ser maior; nunca exibido como duração. */
+  reservedMinutes: number
   status: AppointmentStatus
   notes: string | null
   createdAt: string
@@ -123,7 +126,9 @@ interface AppointmentRecord {
   servicePriceCents: number
   startsAt: Date
   endsAt: Date
+  reservedEndsAt: Date
   status: AppointmentStatus
+  pendingExpiresAt?: Date | null
   notes: string | null
   createdAt: Date
   cancelledAt: Date | null
@@ -146,7 +151,17 @@ export function toPublicAppointment(appointment: AppointmentRecord): PublicAppoi
     startsAtClock: minutesToClock(instantToShopMinutes(appointment.startsAt)),
     endsAtClock: minutesToClock(instantToShopMinutes(appointment.endsAt)),
     durationMinutes,
-    status: appointment.status,
+    /**
+     * Minutos que a agenda reservou. Pode ser maior que `durationMinutes`
+     * quando a grade operacional é maior que o serviço. Vai separado para a
+     * interface poder ser honesta: mostramos a duração real do corte e, se
+     * quisermos, explicamos a reserva — nunca inflamos uma como se fosse a outra.
+     */
+    reservedMinutes: Math.round(
+      (appointment.reservedEndsAt.getTime() - appointment.startsAt.getTime()) / 60_000,
+    ),
+    status: appointment.status === "PENDING" && appointment.pendingExpiresAt && appointment.pendingExpiresAt.getTime() <= Date.now()
+      ? "EXPIRED" : appointment.status,
     notes: appointment.notes,
     createdAt: appointment.createdAt.toISOString(),
     cancelledAt: appointment.cancelledAt?.toISOString() ?? null,

@@ -4,7 +4,7 @@ import {
   blockedRange,
   computeSlotStarts,
   fitsInAnyWindow,
-  isStartOnSlotGrid,
+  limitStartOptions,
   overlaps,
   windowsFromBusinessHours,
   type BusyInterval,
@@ -35,10 +35,13 @@ function starts(input: {
   windows: OpenWindow[]
   busy?: BusyInterval[]
   durationMinutes: number
+  reservedMinutes?: number
   slotIntervalMinutes?: number
   bufferBeforeMinutes?: number
   bufferAfterMinutes?: number
   earliestStartMinute?: number
+  adaptive?: boolean
+  maxOptions?: number
 }): string[] {
   return computeSlotStarts({
     busy: [],
@@ -329,16 +332,14 @@ describe("buffers", () => {
     assert.ok(result.includes("09:45"))
   })
 
-  it("buffer não muda o limite da duração no fechamento", () => {
+  it("reserva e buffer respeitam o fechamento", () => {
     const result = starts({
       windows: CONTINUOUS,
       durationMinutes: CORTE,
       bufferAfterMinutes: 15,
     })
-    // A duração continua mandando no encaixe da janela; o buffer some depois
-    // do fechamento, que é o comportamento pretendido — limpar depois de
-    // fechar é permitido, atender depois de fechar não.
-    assert.equal(result.at(-1), "11:30")
+    // Todo o intervalo operacional deve caber antes do fechamento.
+    assert.equal(result.at(-1), "11:15")
   })
 
   it("buffers de vizinhos diferentes somam: limpeza de um, preparo do outro", () => {
@@ -464,20 +465,6 @@ describe("auditoria de limites e grade", () => {
     assert.equal(slots[0], "10:15")
   })
 
-  it("valida a mesma grade da consulta e reancora em cada janela", () => {
-    const windows = [
-      { startMinute: at("09:05"), endMinute: at("12:00") },
-      { startMinute: at("14:10"), endMinute: at("20:00") },
-    ]
-    for (const start of computeSlotStarts({ windows, busy: [], durationMinutes: 40, slotIntervalMinutes: 15 })) {
-      assert.equal(isStartOnSlotGrid(windows, start, 15), true)
-    }
-    for (const start of ["09:00", "09:06", "12:05", "14:05", "20:00"]) {
-      assert.equal(isStartOnSlotGrid(windows, at(start), 15), false, start)
-    }
-    assert.equal(isStartOnSlotGrid(windows, at("09:20"), 15), true)
-    assert.equal(isStartOnSlotGrid(windows, at("14:10"), 15), true)
-  })
 })
 
 
@@ -489,3 +476,221 @@ describe("parâmetros inválidos da grade", () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Grade operacional de 40 min, reserva mínima, política adaptativa e teto
+// ---------------------------------------------------------------------------
+
+const BASE = 40
+
+/** Reserva operacional: o que a agenda bloqueia, não o que o cliente compra. */
+const reserved = (durationMinutes: number) => Math.max(BASE, durationMinutes)
+
+describe("grade operacional de 40 minutos", () => {
+  it("expediente 09–12 e 14–20 produz a cadência esperada", () => {
+    const result = starts({
+      windows: SPLIT,
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+    })
+    assert.deepEqual(result.filter(value => value < "12:00"), [
+      "09:00", "09:40", "10:20", "11:00",
+    ])
+    assert.deepEqual(result.filter(value => value >= "12:00"), [
+      "14:00", "14:40", "15:20", "16:00", "16:40",
+      "17:20", "18:00", "18:40", "19:20",
+    ])
+    // 13 inícios no dia: exatamente a redução pretendida frente aos 15 min.
+    assert.equal(result.length, 13)
+  })
+
+  it("a duração real continua mandando no encaixe da janela", () => {
+    // 11:00 + 50 = 11:50 cabe antes do almoço; 11:40 + 50 = 12:30 não.
+    const completo = starts({
+      windows: SPLIT,
+      durationMinutes: COMPLETO,
+      reservedMinutes: reserved(COMPLETO),
+      slotIntervalMinutes: BASE,
+    })
+    assert.equal(completo.filter(value => value < "12:00").at(-1), "11:00")
+    assert.equal(completo.at(-1), "18:40", "18:40 + 50 = 19:30 cabe; 19:20 + 50 = 20:10 não")
+  })
+
+  it("os quatro serviços reais permanecem na mesma cadência de inícios", () => {
+    for (const duration of [CORTE, CORTE_BARBA, CABELO_PIGMENTACAO, COMPLETO]) {
+      const result = starts({
+        windows: SPLIT,
+        durationMinutes: duration,
+        reservedMinutes: reserved(duration),
+        slotIntervalMinutes: BASE,
+      })
+      for (const value of result) {
+        const minutes = at(value)
+        const anchored = minutes < at("12:00") ? at("09:00") : at("14:00")
+        assert.equal((minutes - anchored) % BASE, 0, `${value} fora da grade de 40`)
+      }
+    }
+  })
+})
+
+describe("reserva operacional mínima", () => {
+  it("um corte de 30 min bloqueia 40 e empurra o vizinho", () => {
+    // Sem reserva mínima, 09:30 estaria livre logo após 09:00–09:30.
+    const semReserva = starts({
+      windows: CONTINUOUS,
+      busy: [{ startMinute: at("09:00"), endMinute: at("09:30") }],
+      durationMinutes: CORTE,
+      slotIntervalMinutes: 15,
+    })
+    assert.ok(semReserva.includes("09:30"))
+
+    // Com reserva de 40, o período ocupado vai até 09:40.
+    const comReserva = starts({
+      windows: CONTINUOUS,
+      busy: [{ startMinute: at("09:00"), endMinute: at("09:40") }],
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: 15,
+    })
+    assert.ok(!comReserva.includes("09:30"))
+    assert.ok(comReserva.includes("09:45"), "09:45 + 40 = 10:25, livre")
+  })
+
+  it("serviço maior que a grade reserva a própria duração, não 40", () => {
+    assert.equal(reserved(CORTE), 40)
+    assert.equal(reserved(CORTE_BARBA), 40)
+    assert.equal(reserved(CABELO_PIGMENTACAO), 45)
+    assert.equal(reserved(COMPLETO), 50)
+  })
+
+  it("a reserva operacional inteira cabe na janela", () => {
+    // Atendimento de 30 minutos e reserva de 40 cabem na janela de 50.
+    const result = starts({
+      windows: [{ startMinute: at("09:00"), endMinute: at("09:50") }],
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+    })
+    assert.deepEqual(result, ["09:00"])
+  })
+})
+
+describe("política adaptativa", () => {
+  const ocupado = [{ startMinute: at("09:00"), endMinute: at("09:50") }]
+
+  it("desligada: só a grade, então o próximo início é 10:20", () => {
+    const result = starts({
+      windows: SPLIT,
+      busy: ocupado,
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+      adaptive: false,
+    })
+    assert.ok(!result.includes("09:40"), "09:40 invadiria o atendimento")
+    assert.ok(!result.includes("09:50"))
+    assert.equal(result[0], "10:20")
+  })
+
+  it("ligada: reancora no fim do atendimento e oferece 09:50", () => {
+    const result = starts({
+      windows: SPLIT,
+      busy: ocupado,
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+      adaptive: true,
+    })
+    assert.equal(result[0], "09:50", "09:50 + 40 de reserva = 10:30, livre")
+    assert.ok(result.includes("10:20"), "a grade original continua valendo")
+    assert.ok(!result.includes("09:40"))
+  })
+
+  it("ligada não inventa horário que não caiba", () => {
+    // Atendimento termina 11:40; um serviço de 50 min não cabe antes das 12:00.
+    const result = starts({
+      windows: SPLIT,
+      busy: [{ startMinute: at("11:00"), endMinute: at("11:40") }],
+      durationMinutes: COMPLETO,
+      reservedMinutes: reserved(COMPLETO),
+      slotIntervalMinutes: BASE,
+      adaptive: true,
+    })
+    assert.ok(!result.includes("11:40"))
+    assert.ok(result.every(value => value >= "14:00" || value < "11:00"))
+  })
+
+  it("é determinística: mesma entrada, mesma lista", () => {
+    const input = {
+      windows: SPLIT,
+      busy: ocupado,
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+      adaptive: true,
+    }
+    assert.deepEqual(starts(input), starts(input))
+  })
+})
+
+describe("teto de opções por dia", () => {
+  it("preserva o primeiro e o último, amostrando o meio", () => {
+    const entrada = Array.from({ length: 50 }, (_, index) => index * 10)
+    const limitado = limitStartOptions(entrada, 20)
+    assert.ok(limitado.length <= 20)
+    assert.equal(limitado[0], entrada[0])
+    assert.equal(limitado.at(-1), entrada.at(-1))
+    // Ordem preservada e sem repetição.
+    assert.deepEqual(limitado, [...limitado].sort((a, b) => a - b))
+    assert.equal(new Set(limitado).size, limitado.length)
+  })
+
+  it("não é slice: mantém cobertura do fim do dia", () => {
+    const entrada = Array.from({ length: 40 }, (_, index) => index)
+    const limitado = limitStartOptions(entrada, 5)
+    assert.ok(limitado.includes(39), "o último horário não pode sumir")
+    assert.notDeepEqual(limitado, entrada.slice(0, 5))
+  })
+
+  it("lista menor que o teto passa intacta", () => {
+    const entrada = [0, 40, 80]
+    assert.deepEqual(limitStartOptions(entrada, 20), entrada)
+  })
+
+  it("a grade de 40 já fica abaixo do teto num dia cheio", () => {
+    const result = starts({
+      windows: SPLIT,
+      durationMinutes: CORTE,
+      reservedMinutes: reserved(CORTE),
+      slotIntervalMinutes: BASE,
+      maxOptions: 20,
+    })
+    assert.equal(result.length, 13)
+  })
+
+  it("aplica o teto quando a grade produziria opções demais", () => {
+    const result = starts({
+      windows: SPLIT,
+      durationMinutes: CORTE,
+      slotIntervalMinutes: 15,
+      maxOptions: 20,
+    })
+    assert.equal(result.length, 20)
+    assert.equal(result[0], "09:00")
+    assert.equal(result.at(-1), "19:30", "o fim do expediente continua ofertado")
+  })
+})
+
+it("regression: operational reservation must fit before lunch and closing", () => {
+  const result=computeSlotStarts({windows:[{startMinute:540,endMinute:575}],busy:[],durationMinutes:30,reservedMinutes:40,slotIntervalMinutes:40})
+  assert.deepEqual(result,[])
+})
+
+for (const seconds of [1, 30, 59, 60]) {
+  it(`adaptive rounds 10:00 + ${seconds}s up to 10:01`, () => {
+    const result=computeSlotStarts({windows:SPLIT,busy:[{startMinute:540,endMinute:600+seconds/60}],durationMinutes:30,reservedMinutes:40,slotIntervalMinutes:40,adaptive:true});
+    assert.equal(result[0],601);
+    assert.ok(result.every(Number.isInteger));
+  });
+}

@@ -5,12 +5,16 @@ import { sendError } from "../utils/http.js"
 import { logger } from "../utils/logger.js"
 import { isProduction } from "../config/env.js"
 
+function safePath(path: string): string {
+  return path.replace(/(\/booking\/requests\/)[^/]+/g, "$1[redacted]")
+}
+
 export function notFoundHandler(req: Request, res: Response) {
   return sendError(
     res,
     404,
     ErrorCodes.NOT_FOUND,
-    `Rota não encontrada: ${req.method} ${req.path}`,
+    `Rota não encontrada: ${req.method} ${safePath(req.path)}`,
   )
 }
 
@@ -26,7 +30,7 @@ export function errorHandler(
 ) {
   if (error instanceof AppError) {
     if (error.statusCode >= 500) {
-      logger.error("Erro de aplicação", { code: error.code, path: req.path })
+      logger.error("Erro de aplicação", { code: error.code, path: safePath(req.path) })
     }
     return sendError(
       res,
@@ -75,10 +79,10 @@ export function errorHandler(
     )
 
   logger.error("Erro não tratado", {
-    path: req.path,
+    path: safePath(req.path),
     method: req.method,
     name: error instanceof Error ? error.name : "UnknownError",
-    ...(isProduction
+    ...(isProduction || req.path.startsWith("/booking/requests")
       ? {}
       : { stack: error instanceof Error ? error.stack : undefined }),
   })

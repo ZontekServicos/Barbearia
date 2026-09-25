@@ -160,3 +160,20 @@ export async function getCustomerDossier(
 ): Promise<{ summary: CustomerSummary; appointments: Appointment[] }> {
   return apiRequest(`/admin/customers/${userId}/summary`)
 }
+
+/**
+ * Decide uma solicitação pública pendente.
+ *
+ * Confirmar não recria a reserva — o horário já estava segurado desde o
+ * pedido. Recusar o libera na consulta seguinte.
+ */
+export async function decideBookingRequest(
+  id: string,
+  decision: "CONFIRMED" | "REJECTED",
+): Promise<AdminAppointment> {
+  const data = await apiRequest<{ appointment: AdminAppointment }>(
+    `/admin/requests/${id}/decide`,
+    { method: "POST", body: { decision } },
+  )
+  return data.appointment
+}

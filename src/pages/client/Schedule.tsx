@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Check, Scissors, Clock,
+  ArrowLeft, Check, Scissors, Clock, Phone, User, Hourglass,
   CalendarCheck, ChevronLeft, ChevronRight, AlertCircle, RefreshCw
 } from 'lucide-react'
 import {
@@ -23,16 +22,26 @@ import {
   type Service,
 } from '@/services/booking'
 import { cn } from '@/lib/utils'
-import { useAuth, type AuthStatus } from '@/context/AuthContext'
+import { Input } from '@/components/ui/input'
+import { useAuth } from '@/context/AuthContext'
+import { looksLikeCompletePhone, maskPhone } from '@/lib/phone'
+import {
+  requestBooking,
+  rememberRequestToken,
+  getBookingPolicy,
+  type BookingPolicy,
+  type BookingRequestResult,
+} from '@/services/public-booking'
 import {
   clearBookingIntent,
   readBookingIntent,
   saveBookingIntent,
 } from '@/services/booking-intent'
 
-type Step = 'service' | 'date' | 'time' | 'confirm' | 'success'
+type Step = 'phone' | 'service' | 'date' | 'time' | 'confirm' | 'success'
 
 const STEPS: { key: Step; label: string }[] = [
+  { key: 'phone', label: 'Contato' },
   { key: 'service', label: 'Serviço' },
   { key: 'date', label: 'Data' },
   { key: 'time', label: 'Horário' },
@@ -108,7 +117,7 @@ function StepProgress({ current }: { current: Step }) {
   )
 }
 
-function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
+function ServiceStep({ onSelect, onBack }: { onSelect: (s: Service) => void; onBack: () => void }) {
   const [services, setServices] = useState<Service[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -130,9 +139,14 @@ function ServiceStep({ onSelect }: { onSelect: (s: Service) => void }) {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="text-xl font-bold tracking-tight">Escolha o serviço</h2>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">Selecione o que você precisa hoje.</p>
+      <div className="flex items-center gap-3 mb-6">
+        <button aria-label="Voltar à etapa anterior" onClick={onBack} className="min-h-11 min-w-11 inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <div>
+          <h2 className="text-xl font-bold tracking-tight">Escolha o serviço</h2>
+          <p className="text-sm text-[var(--muted-foreground)]">Selecione o que você precisa hoje.</p>
+        </div>
       </div>
 
       {loading ? (
@@ -470,23 +484,33 @@ function ConfirmStep({
   service,
   date,
   slot,
+  fullName,
+  phone,
   onConfirm,
   onBack,
+  onEditContact,
   loading,
   error,
-  authStatus,
+  requiresApproval,
 }: {
   service: Service
   date: Date
   slot: AvailableSlot
+  fullName: string
+  phone: string
   onConfirm: () => void
   onBack: () => void
+  onEditContact: () => void
   loading: boolean
   error: string | null
-  authStatus: AuthStatus
+  requiresApproval: boolean
 }) {
-  const needsAccount = authStatus === 'unauthenticated' || authStatus === 'error'
-  const awaitingApproval = authStatus === 'pendingApproval'
+  // Reserva operacional: quanto a agenda bloqueia. Só é mencionada quando
+  // difere da duração — e nunca no lugar dela. Um corte de 30 min é
+  // apresentado como 30 min, sempre.
+  const reserved = slot.reservedMinutes ?? service.durationMinutes
+  const holdsLonger = reserved > service.durationMinutes
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
@@ -494,7 +518,9 @@ function ConfirmStep({
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div>
-          <h2 className="text-xl font-bold tracking-tight">Confirmar agendamento</h2>
+          <h2 className="text-xl font-bold tracking-tight">
+            {requiresApproval ? 'Revisar solicitação' : 'Confirmar agendamento'}
+          </h2>
           <p className="text-sm text-[var(--muted-foreground)]">Revise os detalhes abaixo.</p>
         </div>
       </div>
@@ -514,15 +540,36 @@ function ConfirmStep({
             { label: 'Duração', value: `${service.durationMinutes} minutos` },
             { label: 'Valor', value: `R$ ${service.priceFormatted}`, highlight: true },
           ].map(({ label, value, highlight }) => (
-            <div key={label} className="flex items-center justify-between">
+            <div key={label} className="flex items-center justify-between gap-3">
               <span className="text-sm text-[var(--muted-foreground)]">{label}</span>
-              <span className={cn('text-sm font-semibold', highlight && 'text-[var(--primary)] text-base')}>
+              <span className={cn('text-sm font-semibold text-right', highlight && 'text-[var(--primary)] text-base')}>
                 {value}
               </span>
             </div>
           ))}
         </div>
+        <div className="p-4 border-t border-[var(--primary)]/20 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold truncate">{fullName}</p>
+            <p className="text-xs text-[var(--muted-foreground)] tabular-nums">{phone}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onEditContact}
+            disabled={loading}
+            className="min-h-11 px-2 text-sm text-[var(--primary)] hover:text-[var(--primary-light)] transition-colors shrink-0"
+          >
+            Editar
+          </button>
+        </div>
       </div>
+
+      {holdsLonger && (
+        <p className="mb-4 text-xs text-[var(--muted-foreground)]">
+          A barbearia reserva {reserved} minutos na agenda para este horário; seu
+          atendimento dura {service.durationMinutes} minutos.
+        </p>
+      )}
 
       {error && (
         <p
@@ -533,64 +580,189 @@ function ConfirmStep({
         </p>
       )}
 
-      {needsAccount && (
+      {requiresApproval && (
         <p className="mb-4 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/8 px-3 py-2.5 text-sm text-[var(--foreground)]">
-          Falta só identificar você. Sua escolha fica guardada — confirmamos a
-          disponibilidade logo depois.
-        </p>
-      )}
-
-      {awaitingApproval && (
-        <p className="mb-4 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/8 px-3 py-2.5 text-sm text-[var(--foreground)]">
-          Seu cadastro está em análise. A barbearia precisa aprovar seu acesso
-          antes do primeiro agendamento — guardamos sua escolha até lá.
+          A barbearia confirma cada pedido. Seu horário fica segurado enquanto
+          isso; o atendimento ainda depende da aprovação.
         </p>
       )}
 
       <Button className="w-full h-12 text-base" onClick={onConfirm} disabled={loading}>
         {loading
-          ? 'Confirmando...'
-          : needsAccount
-            ? 'Entrar e confirmar'
-            : awaitingApproval
-              ? 'Ver situação do cadastro'
-              : 'Confirmar agendamento'}
+          ? 'Enviando...'
+          : requiresApproval
+            ? 'Solicitar agendamento'
+            : 'Confirmar agendamento'}
       </Button>
     </div>
   )
 }
 
-function SuccessStep({ appointment, onRestart }: { appointment: Appointment; onRestart: () => void }) {
-  const navigate = useNavigate()
+/** Primeira etapa: o WhatsApp basta para começar. Sem senha, sem código. */
+function PhoneStep({
+  phone,
+  fullName,
+  onChangePhone,
+  onChangeName,
+  onContinue,
+}: {
+  phone: string
+  fullName: string
+  onChangePhone: (value: string) => void
+  onChangeName: (value: string) => void
+  onContinue: () => void
+}) {
+  const ready = looksLikeCompletePhone(phone) && fullName.trim().length >= 2
+
+  return (
+    <form
+      onSubmit={event => { event.preventDefault(); if (ready) onContinue() }}
+      className="space-y-4"
+    >
+      <div className="mb-6">
+        <h2 className="text-xl font-bold tracking-tight">Vamos agendar seu horário?</h2>
+        <p className="text-sm text-[var(--muted-foreground)] mt-1">
+          Informe seu WhatsApp para começar.
+        </p>
+      </div>
+
+      <Input
+        label="WhatsApp"
+        type="tel"
+        icon={<Phone className="h-4 w-4" />}
+        placeholder="(71) 99999-9999"
+        value={phone}
+        onChange={event => onChangePhone(maskPhone(event.target.value))}
+        autoComplete="tel"
+        inputMode="tel"
+        maxLength={24}
+        required
+      />
+
+      <Input
+        label="Seu nome"
+        type="text"
+        icon={<User className="h-4 w-4" />}
+        placeholder="João Silva"
+        value={fullName}
+        onChange={event => onChangeName(event.target.value)}
+        autoComplete="name"
+        maxLength={120}
+        required
+      />
+
+      <Button type="submit" className="w-full h-12 text-base" disabled={!ready}>
+        Continuar
+      </Button>
+
+      <p className="text-xs text-center text-[var(--muted-foreground)]">
+        Sem senha e sem código. Usamos o número só para identificar seu
+        atendimento.
+      </p>
+    </form>
+  )
+}
+
+/**
+ * Resultado da solicitação.
+ *
+ * Nunca diz "confirmado" quando o pedido ainda depende do barbeiro — a
+ * diferença é o ponto inteiro da política de aprovação.
+ */
+function SuccessStep({
+  result,
+  onRestart,
+}: {
+  result: BookingRequestResult
+  onRestart: () => void
+}) {
+  const { appointment, awaitingApproval, pendingTtlMinutes } = result
   const [year, month, day] = appointment.date.split('-')
 
   return (
     <div className="text-center py-6">
-      <div className="w-20 h-20 rounded-full bg-[var(--primary)]/15 border-2 border-[var(--primary)]/40 flex items-center justify-center mx-auto mb-6">
-        <Check className="h-10 w-10 text-[var(--primary)]" />
+      <div className={cn(
+        'w-20 h-20 rounded-full border-2 flex items-center justify-center mx-auto mb-6',
+        awaitingApproval
+          ? 'bg-[var(--primary)]/10 border-[var(--primary)]/35'
+          : 'bg-[var(--primary)]/15 border-[var(--primary)]/40',
+      )}>
+        {awaitingApproval
+          ? <Hourglass className="h-9 w-9 text-[var(--primary)]" />
+          : <Check className="h-10 w-10 text-[var(--primary)]" />}
       </div>
-      <h2 className="font-display text-2xl font-bold tracking-tight mb-2">Agendamento confirmado!</h2>
-      <p className="text-[var(--muted-foreground)] text-sm mb-8">
+
+      <h2 className="font-display text-2xl font-bold tracking-tight mb-2">
+        {awaitingApproval ? 'Solicitação enviada!' : 'Agendamento confirmado!'}
+      </h2>
+
+      <p className="text-[var(--muted-foreground)] text-sm mb-6">
         <span className="text-[var(--foreground)] font-medium">{appointment.serviceName}</span>{' '}
         no dia{' '}
         <span className="text-[var(--foreground)] font-medium">{day}/{month}/{year}</span>{' '}
-        às <span className="text-[var(--foreground)] font-medium">{appointment.startsAtClock}</span>.
+        às <span className="text-[var(--foreground)] font-medium">{appointment.startsAtClock}</span>
+        {' '}– {appointment.endsAtClock}.
       </p>
 
       <div className="border border-[var(--primary)]/30 bg-[var(--primary)]/5 rounded-xl p-4 mb-8 text-left">
-        <p className="text-xs text-[var(--muted-foreground)] mb-1">Lembrete</p>
-        <p className="text-sm text-[var(--foreground)]">Chegue com 5 minutos de antecedência. Em caso de imprevisto, cancele com pelo menos 2 horas de antecedência.</p>
+        {awaitingApproval ? (
+          <>
+            <p className="text-xs text-[var(--muted-foreground)] mb-1">Ainda não está confirmado</p>
+            <p className="text-sm text-[var(--foreground)]">
+              A barbearia precisa confirmar seu pedido. Seguramos este horário
+              por {Math.round(pendingTtlMinutes / 60)}h enquanto isso — depois
+              disso ele volta a ficar disponível para outras pessoas.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-[var(--muted-foreground)] mb-1">Lembrete</p>
+            <p className="text-sm text-[var(--foreground)]">
+              Chegue com 5 minutos de antecedência. Em caso de imprevisto, avise
+              a barbearia com antecedência.
+            </p>
+          </>
+        )}
       </div>
 
       <div className="space-y-3">
-        <Button className="w-full h-11" onClick={() => navigate('/client/appointments')}>
-          Ver meus agendamentos
-        </Button>
-        <Button variant="outline" className="w-full h-11" onClick={onRestart}>
+        <Button className="w-full h-11" onClick={onRestart}>
           Fazer outro agendamento
         </Button>
-        <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" onClick={() => navigate('/')}>
-          Voltar ao início
+        <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" asChild>
+          <a href="/">Voltar ao início</a>
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Retomada de um agendamento interrompido.
+ *
+ * Aparece como ESCOLHA, nunca como redirecionamento automático. Antes, uma
+ * seleção guardada jogava a pessoa direto na confirmação e ela não conseguia
+ * mais trocar serviço nem horário — ficava presa no fim do fluxo.
+ */
+function ResumePrompt({
+  onResume,
+  onDiscard,
+}: {
+  onResume: () => void
+  onDiscard: () => void
+}) {
+  return (
+    <div className="border border-[var(--primary)]/25 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 mb-6">
+      <h2 className="text-base font-semibold mb-1">Você tem um agendamento em andamento</h2>
+      <p className="text-sm text-[var(--muted-foreground)] mb-4">
+        Podemos retomar de onde você parou ou começar do zero.
+      </p>
+      <div className="space-y-2">
+        <Button className="w-full h-11" onClick={onResume}>
+          Continuar agendamento
+        </Button>
+        <Button variant="outline" className="w-full h-11" onClick={onDiscard}>
+          Começar novo agendamento
         </Button>
       </div>
     </div>
@@ -598,145 +770,194 @@ function SuccessStep({ appointment, onRestart }: { appointment: Appointment; onR
 }
 
 export default function Schedule() {
-  const navigate = useNavigate()
-  const { status } = useAuth()
-  const [step, setStep] = useState<Step>('service')
+  // A sessão serve APENAS para poupar digitação de quem já entrou. Ela não
+  // autoriza nada aqui: a solicitação é pública e o backend valida tudo de
+  // novo a partir do telefone enviado.
+  const { user } = useAuth()
+  const [step, setStep] = useState<Step>('phone')
+  const [phone, setPhone] = useState(() => user?.phoneFormatted || '')
+  const [fullName, setFullName] = useState(() => user?.fullName || '')
+
+  useEffect(() => {
+    if (!user) return
+    // O perfil pode não trazer o telefone formatado; nunca deixe o campo
+    // virar undefined, senão a máscara quebra no primeiro render.
+    setPhone(current => current || user.phoneFormatted || '')
+    setFullName(current => current || user.fullName || '')
+  }, [user])
   const [service, setService] = useState<Service | null>(null)
   const [date, setDate] = useState<Date | null>(null)
   const [slot, setSlot] = useState<AvailableSlot | null>(null)
-  const [created, setCreated] = useState<Appointment | null>(null)
+  const [result, setResult] = useState<BookingRequestResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const restored = useRef(false)
 
   /**
-   * Retorno do login/cadastro: reconstrói a seleção que a pessoa já tinha
-   * feito, em vez de mandá-la começar do zero.
-   *
-   * Reconstruir é só a parte visual. A confirmação continua passando pelo
-   * backend, que revalida serviço, expediente, antecedência e — sobretudo —
-   * se o horário ainda está livre. A EXCLUDE constraint no banco garante que
-   * duas pessoas não fiquem com o mesmo horário, então uma intenção guardada
-   * nunca vira reserva indevida.
+   * Existe uma seleção guardada? Lida UMA vez, na montagem, e apenas para
+   * oferecer a retomada. Nada é restaurado sem a pessoa pedir.
    */
+  const [pendingIntent, setPendingIntent] = useState(() => readBookingIntent())
+  // Política servida pelo backend: quem decide se o pedido aguarda aprovação
+  // é a regra de negócio, não o navegador.
+  const [policy, setPolicy] = useState<BookingPolicy | null>(null)
   useEffect(() => {
-    if (restored.current || status === 'loading') return
-    const intent = readBookingIntent()
+    let cancelled = false
+    void getBookingPolicy()
+      .then(value => { if (!cancelled) setPolicy(value) })
+      .catch(() => { /* o rótulo cai no padrão conservador */ })
+    return () => { cancelled = true }
+  }, [])
+  const [resuming, setResuming] = useState(false)
+
+  /**
+   * Retomada voluntária: reconstrói serviço, data e horário e revalida a
+   * disponibilidade antes de mostrar a confirmação.
+   *
+   * O telefone NÃO é guardado — dado pessoal não fica no armazenamento do
+   * navegador —, então a retomada volta para a etapa de contato com o resto
+   * já preenchido.
+   */
+  async function resumeIntent() {
+    const intent = pendingIntent
     if (!intent) return
 
-    let cancelled = false
-    void (async () => {
-      try {
-        const services = await listServices()
-        const chosen = services.find(entry => entry.id === intent.serviceId)
-        if (cancelled) return
-        if (!chosen) { restored.current = true; return clearBookingIntent() }
-
-        const [year, month, day] = intent.date.split('-').map(Number)
-        const chosenDate = new Date(year!, month! - 1, day!)
-
-        // Revalidação real: o horário guardado só volta se ainda existir.
-        const availability = await getAvailability(intent.date, chosen.id)
-        const stillFree = availability.slots.find(
-          entry => entry.startsAtClock === intent.startsAt,
-        )
-        if (cancelled) return
-
-        restored.current = true
-        setService(chosen)
-        setDate(chosenDate)
-        if (stillFree) {
-          setSlot(stillFree)
-          setStep('confirm')
-        } else {
-          setSlot(null)
-          setStep('time')
-          setNotice(
-            'O horário que você tinha escolhido não está mais livre. Escolha outro.',
-          )
-        }
-      } catch {
-        if (!cancelled) setNotice('Não foi possível recuperar sua seleção. Recarregue para tentar novamente.')
+    setResuming(true)
+    setError(null)
+    try {
+      const services = await listServices()
+      const chosen = services.find(entry => entry.id === intent.serviceId)
+      if (!chosen) {
+        clearBookingIntent()
+        setPendingIntent(null)
+        setNotice('O serviço escolhido não está mais disponível. Escolha outro.')
+        return
       }
-    })()
 
-    return () => { cancelled = true }
-  }, [status])
+      const [year, month, day] = intent.date.split('-').map(Number)
+      const chosenDate = new Date(year!, month! - 1, day!)
+
+      const availability = await getAvailability(intent.date, chosen.id)
+      const stillFree = availability.slots.find(
+        entry => entry.startsAtClock === intent.startsAt,
+      )
+
+      setService(chosen)
+      setDate(chosenDate)
+      setSlot(stillFree ?? null)
+      setPendingIntent(null)
+      if (!stillFree) {
+        setNotice('O horário que você tinha escolhido não está mais livre. Escolha outro.')
+      }
+      // Sempre começa pelo contato: o telefone não é preservado.
+      setStep('phone')
+    } catch {
+      setNotice('Não foi possível recuperar sua seleção. Comece um novo agendamento.')
+      clearBookingIntent()
+      setPendingIntent(null)
+    } finally {
+      setResuming(false)
+    }
+  }
+
+  function discardIntent() {
+    clearBookingIntent()
+    setPendingIntent(null)
+    setService(null)
+    setDate(null)
+    setSlot(null)
+    setNotice(null)
+    setStep('phone')
+  }
+
+  /** Para onde o botão "voltar" leva, em cada etapa. */
+  function goBack(from: Step) {
+    setError(null)
+    if (from === 'service') return setStep('phone')
+    if (from === 'date') return setStep('service')
+    if (from === 'time') return setStep('date')
+    if (from === 'confirm') return setStep('time')
+  }
 
   /**
-   * Sem atualização otimista: o agendamento só aparece como confirmado depois
-   * que o backend cria. Entre listar e reservar, o horário pode ter sido
-   * tomado por outra pessoa — e nesse caso voltamos para a escolha de horário.
+   * Envia a solicitação.
+   *
+   * Sem login e sem sessão: o WhatsApp informado no começo identifica o
+   * contato. Nada de duração, preço ou status vai daqui — o servidor deriva
+   * tudo do serviço no banco e revalida o horário antes de gravar.
    */
+  const submission = useRef(false)
   async function handleConfirm() {
-    if (!service || !date || !slot) return
+    if (submission.current || !service || !date || !slot) return
+    submission.current = true
 
     const dateISO = format(date, 'yyyy-MM-dd')
-    const intent = {
-      serviceId: service.id,
-      date: dateISO,
-      startsAt: slot.startsAtClock,
-    }
-
-    // Ainda sem sessão: guarda a seleção e manda autenticar.
-    if (status === 'unauthenticated' || status === 'error') {
-      saveBookingIntent(intent)
-      return navigate('/login?next=%2Fagendar')
-    }
-
-    // Cadastro em análise: a política da barbearia exige aprovação antes do
-    // primeiro agendamento, e ela vale no backend. Dizemos isso aqui em vez
-    // de deixar o usuário bater num 403.
-    if (status === 'pendingApproval') {
-      saveBookingIntent(intent)
-      return navigate('/conta/pendente')
-    }
-
-    if (status === 'blocked') return navigate('/conta/bloqueada')
-
     setLoading(true)
     setError(null)
     try {
-      const appointment = await createAppointment(intent)
+      const created = await requestBooking({
+        phone,
+        fullName: fullName.trim(),
+        serviceId: service.id,
+        date: dateISO,
+        startsAt: slot.startsAtClock,
+      })
+      // Confirmado: a seleção em andamento deixa de existir.
       clearBookingIntent()
-      setCreated(appointment)
+      rememberRequestToken(created.publicToken)
+      setResult(created)
       setStep('success')
     } catch (err) {
-      setError(describeError(err, 'Não foi possível confirmar o agendamento.'))
-      // Conflito: alguém reservou antes. Volta para a lista já atualizada.
+      setError(describeError(err, 'Não foi possível enviar sua solicitação.'))
+      // Conflito: alguém pegou antes. Volta para a lista já atualizada.
       if (err instanceof ApiError && err.status === 409) {
         setSlot(null)
         setStep('time')
       }
-      // A conta deixou de estar apta entre abrir a tela e confirmar.
-      if (err instanceof ApiError && err.code === 'ACCOUNT_PENDING') {
-        saveBookingIntent(intent)
-        navigate('/conta/pendente')
-      }
     } finally {
+      submission.current = false
       setLoading(false)
     }
   }
 
   function restart() {
+    setPhone('')
+    setFullName('')
     clearBookingIntent()
     setService(null)
     setDate(null)
     setSlot(null)
-    setCreated(null)
+    setResult(null)
     setError(null)
     setNotice(null)
-    setStep('service')
+    setPendingIntent(null)
+    setStep('phone')
   }
 
-  if (step === 'success' && created) {
-    return <SuccessStep appointment={created} onRestart={restart} />
+  if (step === 'success' && result) {
+    return <SuccessStep result={result} onRestart={restart} />
+  }
+
+  // A retomada é oferecida antes de qualquer etapa, e só uma vez.
+  if (pendingIntent && step === 'phone') {
+    return (
+      <div>
+        <ResumePrompt
+          onResume={() => void resumeIntent()}
+          onDiscard={discardIntent}
+        />
+        {resuming && (
+          <p role="status" className="text-sm text-[var(--muted-foreground)] text-center">
+            Recuperando sua seleção…
+          </p>
+        )}
+      </div>
+    )
   }
 
   return (
     <div>
-      {step !== 'success' && <StepProgress current={step} />}
+      <StepProgress current={step} />
 
       {notice && (
         <p
@@ -756,12 +977,21 @@ export default function Schedule() {
         </p>
       )}
 
+      {step === 'phone' && (
+        <PhoneStep
+          phone={phone}
+          fullName={fullName}
+          onChangePhone={setPhone}
+          onChangeName={setFullName}
+          onContinue={() => { setNotice(null); setStep(slot && service && date ? 'confirm' : 'service') }}
+        />
+      )}
       {step === 'service' && (
         <ServiceStep
           onSelect={s => {
             // Trocar o serviço invalida o horário escolhido: um intervalo que
             // comportava 30 min pode não comportar 50. Guardá-lo em silêncio
-            // levaria o cliente a confirmar algo que o backend vai recusar.
+            // levaria a pessoa a confirmar algo que o backend vai recusar.
             if (service && service.id !== s.id && slot) {
               setSlot(null)
               setNotice('O horário foi limpo porque a duração do serviço mudou.')
@@ -771,17 +1001,30 @@ export default function Schedule() {
             setService(s)
             setStep('date')
           }}
+          onBack={() => goBack('service')}
         />
       )}
       {step === 'date' && (
-        <DateStep onSelect={d => { setDate(d); setStep('time') }} onBack={() => setStep('service')} />
+        <DateStep onSelect={d => { setDate(d); setStep('time') }} onBack={() => goBack('date')} />
       )}
       {step === 'time' && date && service && (
         <TimeStep
           date={date}
           service={service}
-          onSelect={s => { setSlot(s); setError(null); setNotice(null); setStep('confirm') }}
-          onBack={() => setStep('date')}
+          onSelect={s => {
+            setSlot(s)
+            setError(null)
+            setNotice(null)
+            // Guarda a seleção para uma eventual retomada. Só serviço, data e
+            // horário — nenhum dado pessoal vai para o armazenamento.
+            saveBookingIntent({
+              serviceId: service.id,
+              date: format(date, 'yyyy-MM-dd'),
+              startsAt: s.startsAtClock,
+            })
+            setStep('confirm')
+          }}
+          onBack={() => goBack('time')}
         />
       )}
       {step === 'confirm' && service && date && slot && (
@@ -789,11 +1032,14 @@ export default function Schedule() {
           service={service}
           date={date}
           slot={slot}
+          fullName={fullName}
+          phone={phone}
           onConfirm={handleConfirm}
-          onBack={() => setStep('time')}
+          onBack={() => goBack('confirm')}
+          onEditContact={() => setStep('phone')}
           loading={loading}
           error={error}
-          authStatus={status}
+          requiresApproval={policy?.requiresApproval ?? true}
         />
       )}
     </div>

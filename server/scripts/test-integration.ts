@@ -14,6 +14,7 @@ process.env.DATABASE_URL = value
 // Paths and args are passed directly, without shell interpolation.
 for (const args of [
   ["node_modules/prisma/build/index.js", "migrate", "deploy"],
+  ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/public-migration.integration.test.ts"],
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/service-buffers.integration.test.ts"],
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/password-migration.integration.test.ts"],
   [
@@ -25,6 +26,11 @@ for (const args of [
     "node_modules/tsx/dist/cli.mjs",
     "--test",
     "src/config/booking.integration.test.ts",
+  ],
+  [
+    "node_modules/tsx/dist/cli.mjs",
+    "--test",
+    "src/config/public-booking.integration.test.ts",
   ],
 ]) {
   const result = spawnSync(process.execPath, args, {

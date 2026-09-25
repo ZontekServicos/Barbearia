@@ -1,16 +1,16 @@
 ﻿import { test, expect, type Page, type Route } from '@playwright/test'
 
 const legacy = Boolean(process.env.LEGACY_AGENDA_REF)
-const service30 = { id: 'cut', name: 'Corte', description: 'Corte simples', priceCents: 3500, priceFormatted: '35,00', durationMinutes: 30, active: true }
-const service50 = { ...service30, id: 'combo', name: 'Cabelo + Barba + Pigmentação', durationMinutes: 50, priceCents: 10000, priceFormatted: '100,00' }
-const slot = (clock: string, duration = 30) => {
+const service30 = { id: '11111111-1111-4111-8111-111111111111', name: 'Corte', description: 'Corte simples', priceCents: 3500, priceFormatted: '35,00', durationMinutes: 30, active: true }
+const service50 = { ...service30, id: '22222222-2222-4222-8222-222222222222', name: 'Cabelo + Barba + Pigmentação', durationMinutes: 50, priceCents: 10000, priceFormatted: '100,00' }
+const slot = (clock: string, duration = 30, reservedMinutes = Math.max(40, duration)) => {
   const startsAt = '2026-09-25T' + clock + ':00-03:00'
   const end = new Date(new Date(startsAt).getTime() + duration * 60_000)
-  return { startsAtClock: clock, endsAtClock: new Date(end.getTime() - 3 * 60 * 60_000).toISOString().slice(11, 16), startsAt, endsAt: end.toISOString() }
+  return { startsAtClock: clock, endsAtClock: new Date(end.getTime() - 3 * 60 * 60_000).toISOString().slice(11, 16), startsAt, endsAt: end.toISOString(), reservedMinutes }
 }
 const appointment = (id: string, clock: string, date = '2026-09-24') => ({
   id, ...slot(clock), startsAt: date + 'T' + clock + ':00-03:00', date,
-  serviceId: 'cut', serviceName: 'Corte', servicePriceCents: 3500,
+  serviceId: '11111111-1111-4111-8111-111111111111', serviceName: 'Corte', servicePriceCents: 3500,
   servicePriceFormatted: '35,00', durationMinutes: 30, status: 'CONFIRMED',
   notes: null, createdAt: '2026-09-20T00:00:00Z', cancelledAt: null,
   customer: { id, fullName: 'Cliente ' + id, phone: '11999999999', phoneFormatted: '(11) 99999-9999' },
@@ -32,11 +32,17 @@ async function setup(page: Page) {
   })
   await page.route('**/api/auth/refresh', route => ok(route, { accessToken: 'browser-test-only' }))
   await page.route('**/api/auth/me', route => ok(route, { user: { id: 'test', role: 'ADMIN', status: 'ACTIVE', fullName: 'Teste', phone: '11999999999' } }))
+  await page.route('**/api/booking/policy', route => ok(route, { requiresApproval: true, baseSlotMinutes: 40, pendingTtlMinutes: 120, minimumAdvanceMinutes: 60 }))
   await page.route('**/api/booking/services', route => ok(route, { services: [service30, service50] }))
   await page.route('**/api/booking/business-hours', route => ok(route, { days: Array.from({ length: 7 }, (_, weekday) => ({ weekday, closed: false, opensAt: '09:00', closesAt: '20:00', breakStartsAt: '12:00', breakEndsAt: '14:00' })) }))
 }
 async function open(page: Page, screen: string) {
   await page.goto('/tests/browser/fixture.html?page=' + screen)
+}
+async function fillContact(page: Page) {
+  await page.getByLabel('WhatsApp').fill('71988881234')
+  await page.getByLabel('Seu nome').fill('Cliente QA')
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
 }
 async function chooseService(page: Page, name = 'Corte') {
   await page.getByRole('button', { name: new RegExp(name) }).click()
@@ -155,20 +161,21 @@ test.describe('current booking components in Chromium', () => {
     await page.route('**/api/booking/availability?**', route => {
       const serviceId = new URL(route.request().url()).searchParams.get('serviceId')!
       ids.push(serviceId)
-      return ok(route, { slots: serviceId === 'cut' ? [slot('11:30')] : [slot('11:00', 50)], reason: null })
+      return ok(route, { slots: serviceId === '11111111-1111-4111-8111-111111111111' ? [slot('11:30')] : [slot('11:00', 50)], reason: null })
     })
-    await open(page, 'schedule'); await chooseService(page); await chooseDate(page)
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
     await page.getByRole('button', { name: '11:30', exact: true }).click()
     await page.getByRole('button', { name: 'Continuar', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Confirmar agendamento', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Revisar solicitação', exact: true })).toBeVisible()
     for (let step = 0; step < 3; step++) await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+    await expect(page.getByRole('heading', { name: 'Escolha o serviço' })).toBeVisible()
     await chooseService(page, 'Cabelo')
     await expect(page.getByRole('status').filter({ hasText: 'horário foi limpo' })).toBeVisible()
     await chooseDate(page)
     await expect(page.getByRole('button', { name: '11:00', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '11:30', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Continuar', exact: true })).toBeDisabled()
-    expect(ids.at(-1)).toBe('combo')
+    expect(ids.at(-1)).toBe('22222222-2222-4222-8222-222222222222')
   })
 
   for (const width of [360, 375, 390, 412, 430]) {
@@ -176,6 +183,9 @@ test.describe('current booking components in Chromium', () => {
       await page.setViewportSize({ width, height: 900 })
       await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00', 50), slot('14:00', 50), slot('18:00', 50)], reason: null }))
       await open(page, 'schedule')
+      await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+      await noOverflow(page); await touchTargets(page)
+      await fillContact(page)
       await expect(page.getByRole('button', { name: /Cabelo/ })).toBeVisible()
       await noOverflow(page); await touchTargets(page)
       await chooseService(page, 'Cabelo')
@@ -196,7 +206,7 @@ test.describe('current booking components in Chromium', () => {
     await page.route('**/api/booking/availability?**', route => ++calls === 1
       ? route.fulfill({ status: 500, json: { success: false, error: { code: 'FAILURE', message: 'Erro de disponibilidade' } } })
       : ok(route, { slots: [slot('18:00')], reason: null }))
-    await open(page, 'schedule'); await chooseService(page); await chooseDate(page)
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
     await expect(page.getByRole('alert')).toContainText('Erro de disponibilidade')
     await page.getByRole('button', { name: 'Tentar novamente' }).click()
     await expect(page.getByRole('heading', { name: 'Noite', exact: true })).toBeVisible()
@@ -245,8 +255,192 @@ test.describe('current booking components in Chromium', () => {
     await expect(page.getByRole('button', { name: 'Inativo', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Inativo', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Ativo', exact: true })).toHaveCount(2)
-    expect(writes.slice(2).map(write => write.path)).toEqual(['/api/admin/services/cut/deactivate', '/api/admin/services/cut/activate'])
+    expect(writes.slice(2).map(write => write.path)).toEqual(['/api/admin/services/11111111-1111-4111-8111-111111111111/deactivate', '/api/admin/services/11111111-1111-4111-8111-111111111111/activate'])
     expect(await page.getByLabel(/buffer/i).count()).toBe(0)
   })
 })
 
+
+test.describe('fluxo público de agendamento', () => {
+  test.skip(legacy, 'Current-component gates run without the historical override.')
+  test.beforeEach(async ({ page }) => { await setup(page) })
+
+  test('solicita agendamento sem senha, sem código e sem login', async ({ page }) => {
+    let sent: any = null
+    await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00')], reason: null }))
+    await page.route('**/api/booking/requests', route => {
+      sent = route.request().postDataJSON()
+      return route.fulfill({
+        status: 201,
+        json: { success: true, data: {
+          appointment: { ...slot('09:00'), id: 'req-1', date: '2026-09-25', serviceName: 'Corte', servicePriceFormatted: '35,00', servicePriceCents: 3500, durationMinutes: 30, status: 'PENDING', notes: null, createdAt: '2026-09-24T00:00:00Z', cancelledAt: null },
+          publicToken: 'a'.repeat(43),
+          awaitingApproval: true,
+          pendingTtlMinutes: 120,
+        } },
+      })
+    })
+
+    await open(page, 'schedule')
+    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    // Nenhum campo de senha em lugar nenhum do fluxo.
+    expect(await page.locator('input[type=password]').count()).toBe(0)
+
+    await fillContact(page)
+    await chooseService(page)
+    await chooseDate(page)
+    await page.getByRole('button', { name: '09:00', exact: true }).click()
+    await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+
+    await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toBeVisible()
+    await expect(page.getByText('30 minutos').first()).toBeVisible()
+    // A reserva operacional é explicada, nunca apresentada como duração.
+    await expect(page.getByText(/reserva 40 minutos na agenda/)).toBeVisible()
+    await expect(page.getByText('Cliente QA')).toBeVisible()
+    await page.getByRole('button', { name: 'Solicitar agendamento' }).click()
+
+    // Enviou só o necessário — nada de duração, preço ou status.
+    await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+    expect(Object.keys(sent).sort()).toEqual(['date', 'fullName', 'phone', 'serviceId', 'startsAt'])
+    expect(sent.phone).toBe('(71) 98888-1234')
+    // Não diz "confirmado" enquanto depende do barbeiro.
+    await expect(page.getByText('Agendamento confirmado!')).toHaveCount(0)
+    await expect(page.getByText('Ainda não está confirmado')).toBeVisible()
+  })
+
+  test('seleção salva não prende na confirmação: dá para retomar ou recomeçar', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00'), slot('09:40')], reason: null }))
+    await page.addInitScript(() => {
+      sessionStorage.setItem('ec.booking.intent', JSON.stringify({
+        serviceId: '11111111-1111-4111-8111-111111111111', date: '2026-09-25', startsAt: '09:00', savedAt: Date.now(),
+      }))
+    })
+
+    await open(page, 'schedule')
+    // Não pula direto para a confirmação: oferece escolha.
+    await expect(page.getByRole('heading', { name: 'Você tem um agendamento em andamento' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Começar novo agendamento' }).click()
+    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    expect(await page.evaluate(() => sessionStorage.getItem('ec.booking.intent'))).toBeNull()
+
+    // E o fluxo novo anda normalmente: serviço, data e horário livres.
+    await fillContact(page)
+    await chooseService(page)
+    await chooseDate(page)
+    await expect(page.getByRole('button', { name: '09:40', exact: true })).toBeVisible()
+  })
+
+  test('retomar traz a seleção de volta e ainda permite trocar tudo', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00'), slot('09:40')], reason: null }))
+    await page.addInitScript(() => {
+      sessionStorage.setItem('ec.booking.intent', JSON.stringify({
+        serviceId: '11111111-1111-4111-8111-111111111111', date: '2026-09-25', startsAt: '09:00', savedAt: Date.now(),
+      }))
+    })
+
+    await open(page, 'schedule')
+    await page.getByRole('button', { name: 'Continuar agendamento' }).click()
+    // Volta pelo contato — o telefone nunca é guardado no navegador.
+    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    await fillContact(page)
+    await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toBeVisible()
+
+    // E dá para voltar e trocar de serviço normalmente.
+    await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+    await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+    await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+    await expect(page.getByRole('heading', { name: 'Escolha o serviço' })).toBeVisible()
+    await chooseService(page, 'Cabelo')
+    await expect(page.getByRole('heading', { name: 'Escolha a data' })).toBeVisible()
+  })
+
+  test('nenhum dado pessoal vai para o armazenamento do navegador', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00')], reason: null }))
+    await open(page, 'schedule')
+    await fillContact(page)
+    await chooseService(page)
+    await chooseDate(page)
+    await page.getByRole('button', { name: '09:00', exact: true }).click()
+    await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+
+    const stored = await page.evaluate(() => ({
+      session: JSON.stringify(sessionStorage),
+      local: JSON.stringify(localStorage),
+    }))
+    expect(stored.session).not.toContain('98888')
+    expect(stored.session).not.toContain('Cliente QA')
+    expect(stored.local).not.toContain('98888')
+    expect(stored.local).not.toContain('Cliente QA')
+  })
+})
+
+test.describe('public submission recovery', () => {
+  test.skip(legacy, 'Current-component gates only.')
+  for (const failure of [409, 429, 500, 'abort', 'timeout'] as const) {
+    test(`recovers from ${failure} and guards double submit`, async ({ page }) => {
+      await setup(page)
+      await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00'), slot('09:40')], reason: null }))
+      let attempts = 0
+      await page.route('**/api/booking/requests', async route => {
+        attempts++
+        if (attempts === 1) {
+          if (failure === 'abort') return route.abort('failed')
+          if (failure === 'timeout') return
+          return route.fulfill({ status: failure, json: { success: false, error: { code: failure === 409 ? 'CONFLICT' : failure === 429 ? 'RATE_LIMITED' : 'INTERNAL_ERROR', message: 'Falha temporária de teste.' } } })
+        }
+        await new Promise(resolve => setTimeout(resolve, 200))
+        return route.fulfill({ status: 201, json: { success: true, data: {
+          appointment: { ...appointment('recovered', '09:00', '2026-09-25'), status: 'PENDING' },
+          publicToken: 'a'.repeat(43), awaitingApproval: true, pendingTtlMinutes: 120,
+        } } })
+      })
+      await open(page, 'schedule')
+      await fillContact(page)
+      await chooseService(page)
+      await chooseDate(page)
+      await page.getByRole('button', { name: '09:00', exact: true }).click()
+      await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+      await page.getByRole('button', { name: 'Solicitar agendamento', exact: true }).click()
+      if (failure === 409) {
+        await expect(page.getByRole('heading', { name: 'Escolha o horário' })).toBeVisible()
+        await page.getByRole('button', { name: '09:40', exact: true }).click()
+        await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+      }
+      const submit = page.getByRole('button', { name: 'Solicitar agendamento', exact: true })
+      await expect(submit).toBeEnabled({ timeout: 18000 })
+      expect(attempts).toBe(1)
+      await submit.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
+      await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+      expect(attempts).toBe(2)
+    })
+  }
+})
+
+test('back navigation changes contact, service, date and time without stale submission', async ({ page }) => {
+  test.skip(legacy, 'Current-component gate only.')
+  await setup(page)
+  await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00'), slot('09:40')], reason: null }))
+  await open(page, 'schedule')
+  await fillContact(page)
+  await chooseService(page)
+  await chooseDate(page)
+  await page.getByRole('button', { name: '09:00', exact: true }).click()
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+  for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+  await page.getByLabel('WhatsApp').fill('71977771234')
+  await page.getByLabel('Seu nome').fill('Novo contato QA')
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toBeVisible()
+  for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
+  await chooseService(page, 'Cabelo')
+  await page.getByRole('button', { name: '26 de setembro de 2026', exact: true }).click()
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+  await page.getByRole('button', { name: '09:40', exact: true }).click()
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+  await expect(page.getByText('Novo contato QA', { exact: true })).toBeVisible()
+  await expect(page.getByText('(71) 97777-1234', { exact: true })).toBeVisible()
+  await expect(page.getByText('Cabelo + Barba + Pigmentação', { exact: true })).toBeVisible()
+  await expect(page.getByText('50 minutos', { exact: true })).toBeVisible()
+})

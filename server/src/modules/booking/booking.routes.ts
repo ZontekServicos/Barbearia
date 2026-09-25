@@ -7,8 +7,19 @@ import {
   availabilityQuerySchema,
   createAppointmentSchema,
   listMyAppointmentsQuerySchema,
+  publicBookingRequestSchema,
+  publicTokenParamSchema,
   uuidParamSchema,
 } from "./booking.schemas.js"
+import {
+  publicBookingRateLimit,
+  publicRequestLookupRateLimit,
+} from "../../middlewares/rate-limit.js"
+import {
+  getPublicRequest,
+  requestPublicAppointment,
+} from "./public-booking.service.js"
+import { BookingRules } from "./booking.rules.js"
 import { listActiveServices } from "./catalog.service.js"
 import { getAvailability } from "./availability.service.js"
 import {
@@ -36,14 +47,9 @@ bookingRouter.get("/business-hours", async (_req, res) => {
 /**
  * Disponibilidade também é pública.
  *
- * O fluxo de agendamento começa antes do login: quem chega pela landing
- * escolhe serviço, data e horário e só então cria conta ou entra. Sem isso a
- * pessoa teria de se cadastrar às cegas, sem saber se existe horário.
- *
- * O que sai daqui é agregado e sem dado pessoal — apenas os horários livres,
- * a mesma informação que qualquer vitrine de agendamento exibe. Quem reservou
- * o que continua exigindo sessão. Criar a reserva, abaixo, segue exigindo
- * conta aprovada.
+ * A consulta mostra apenas horários livres, sem dados de quem reservou.
+ * Solicitações públicas usam /requests; /appointments continua restrita à
+ * conta autenticada e aprovada.
  */
 bookingRouter.get(
   "/availability",
@@ -64,9 +70,9 @@ bookingRouter.post(
     const body = req.body as z.infer<typeof createAppointmentSchema>
 
     // O dono da reserva é sempre a sessão — nunca um userId vindo do corpo.
-    const appointment = await createAppointment({ ...body, userId: req.user!.id })
+    const placed = await createAppointment({ ...body, userId: req.user!.id })
 
-    return sendSuccess(res, { appointment }, 201)
+    return sendSuccess(res, { appointment: placed.appointment }, 201)
   },
 )
 
@@ -102,3 +108,82 @@ bookingRouter.post(
     return sendSuccess(res, { appointment })
   },
 )
+
+// ---------------------------------------------------------------------------
+// Solicitação pública — sem JWT
+// ---------------------------------------------------------------------------
+
+/**
+ * Cria uma solicitação de agendamento identificada apenas pelo WhatsApp.
+ *
+ * Público por decisão de produto: qualquer visitante pode solicitar, mas
+ * o pedido depende de aprovação administrativa. Telefone não comprova
+ * titularidade; a cota e a EXCLUDE reduzem abuso e impedem sobreposição.
+ *
+ * O telefone NÃO vira credencial: esta rota não devolve histórico, não
+ * identifica reservas anteriores e não abre sessão. A resposta traz apenas o
+ * pedido recém-criado e um token aleatório para acompanhá-lo.
+ *
+ * Nada de `userId`, `status`, `priceCents` ou `durationMinutes` é aceito do
+ * navegador: o schema é estrito e o servidor deriva tudo do banco.
+ */
+bookingRouter.post(
+  "/requests",
+  publicBookingRateLimit,
+  validate({ body: publicBookingRequestSchema }),
+  async (req, res) => {
+    const body = req.body as z.infer<typeof publicBookingRequestSchema>
+    const result = await requestPublicAppointment({
+      phone: body.phone,
+      fullName: body.fullName,
+      serviceId: body.serviceId,
+      date: body.date,
+      startsAt: body.startsAt,
+      ...(body.notes ? { notes: body.notes } : {}),
+    })
+
+    return sendSuccess(
+      res,
+      {
+        appointment: result.appointment,
+        publicToken: result.publicToken,
+        awaitingApproval: result.awaitingApproval,
+        pendingTtlMinutes: BookingRules.pendingRequestTtlMinutes,
+      },
+      201,
+    )
+  },
+)
+
+/**
+ * Situação de UMA solicitação, pelo token entregue na criação.
+ *
+ * O token é a chave — o telefone não abre nada. Sem listagem e sem histórico:
+ * quem tem o link vê aquele pedido e mais nada.
+ */
+bookingRouter.get(
+  "/requests/:token",
+  publicRequestLookupRateLimit,
+  validate({ params: publicTokenParamSchema }),
+  async (req, res) => {
+    const { token } = req.params as z.infer<typeof publicTokenParamSchema>
+    return sendSuccess(res, { appointment: await getPublicRequest(token) })
+  },
+)
+
+/**
+ * Política pública da agenda.
+ *
+ * O frontend precisa saber se o pedido será confirmado na hora ou ficará
+ * aguardando o barbeiro — é a diferença entre o botão dizer "Confirmar" ou
+ * "Solicitar". Em vez de duplicar a regra de negócio no navegador, ela é
+ * servida daqui: quem manda continua sendo `BookingRules`.
+ */
+bookingRouter.get("/policy", async (_req, res) => {
+  return sendSuccess(res, {
+    requiresApproval: BookingRules.publicRequestsRequireApproval,
+    baseSlotMinutes: BookingRules.baseSlotMinutes,
+    pendingTtlMinutes: BookingRules.pendingRequestTtlMinutes,
+    minimumAdvanceMinutes: BookingRules.minimumAdvanceMinutes,
+  })
+})

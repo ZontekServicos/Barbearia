@@ -12,6 +12,8 @@ const REDACTED_KEYS = new Set([
   "passwordhash",
   "password_hash",
   "token",
+  "publictoken",
+  "public_token",
   "accesstoken",
   "refreshtoken",
   "tokenhash",

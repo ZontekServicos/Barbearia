@@ -5,7 +5,9 @@
  * nono dígito. Aqui só formatamos o que está sendo digitado — nada do que
  * esta função aceita substitui a validação do servidor.
  */
-export function maskPhone(raw: string): string {
+export function maskPhone(input: string): string {
+  // Defensivo: um valor ausente vindo do perfil não pode derrubar a tela.
+  const raw = input ?? ""
   let digits = raw.replace(/\D/g, "")
   if (digits.length > 11 && digits.startsWith("0")) digits = digits.replace(/^0+/, "")
   if (digits.length === 13 && digits.startsWith("55")) digits = digits.slice(2)
@@ -20,5 +22,5 @@ export function maskPhone(raw: string): string {
 
 /** Dígitos suficientes para um celular com DDD. Só habilita o botão. */
 export function looksLikeCompletePhone(raw: string): boolean {
-  return raw.replace(/\D/g, "").length === 11
+  return (raw ?? "").replace(/\D/g, "").length === 11
 }

@@ -26,8 +26,8 @@ async function insertAppointment(
 ): Promise<void> {
   await db.query(
     `INSERT INTO appointments
-       (id, user_id, service_id, starts_at, ends_at, status, service_name, service_price_cents, created_at, updated_at)
-     VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::"AppointmentStatus", 'Corte', 3500, now(), now())`,
+       (id, user_id, service_id, starts_at, ends_at, reserved_ends_at, status, service_name, service_price_cents, created_at, updated_at)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, $4, $5::"AppointmentStatus", 'Corte', 3500, now(), now())`,
     [userId, serviceId, at(start), at(end), status],
   )
 }
@@ -124,13 +124,13 @@ describe("proteção contra reserva dupla", () => {
     await assert.rejects(async () => {
       await db.transaction(async tx => {
         await tx.query(
-          `INSERT INTO appointments (id, user_id, service_id, starts_at, ends_at, status, service_name, service_price_cents, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, 'CONFIRMED', 'Corte', 3500, now(), now())`,
+          `INSERT INTO appointments (id, user_id, service_id, starts_at, ends_at, reserved_ends_at, status, service_name, service_price_cents, created_at, updated_at)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $4, 'CONFIRMED', 'Corte', 3500, now(), now())`,
           [userId, serviceId, at("14:00"), at("14:40")],
         )
         await tx.query(
-          `INSERT INTO appointments (id, user_id, service_id, starts_at, ends_at, status, service_name, service_price_cents, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, 'CONFIRMED', 'Corte', 3500, now(), now())`,
+          `INSERT INTO appointments (id, user_id, service_id, starts_at, ends_at, reserved_ends_at, status, service_name, service_price_cents, created_at, updated_at)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $4, 'CONFIRMED', 'Corte', 3500, now(), now())`,
           [userId, serviceId, at("14:20"), at("15:00")],
         )
       })

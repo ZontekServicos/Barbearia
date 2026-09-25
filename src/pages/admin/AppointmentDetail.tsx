@@ -10,7 +10,7 @@ import { ApiError } from '@/services/api'
 import {
   getAdminAppointment,
   updateAppointmentStatus,
-  type AdminAppointment,
+  type AdminAppointment,  decideBookingRequest,
 } from '@/services/admin-booking'
 
 const MONTHS = [
@@ -49,6 +49,22 @@ export default function AppointmentDetail() {
   useEffect(() => { void load() }, [load])
 
   /** Sem atualização otimista: o status só muda na tela depois do backend confirmar. */
+  /** Confirma ou recusa uma solicitação pública que ainda aguarda decisão. */
+  async function handleDecision(decision: 'CONFIRMED' | 'REJECTED', label: string) {
+    if (!id) return
+    setPending(label)
+    setActionError(null)
+    try {
+      setAppointment(await decideBookingRequest(id, decision))
+      setToast(label + '.')
+      setTimeout(() => setToast(null), 3000)
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Não foi possível decidir a solicitação.')
+    } finally {
+      setPending(null)
+    }
+  }
+
   async function handleAction(status: 'COMPLETED' | 'CANCELLED' | 'NO_SHOW', label: string) {
     if (!id) return
     setPending(label)
@@ -158,7 +174,28 @@ export default function AppointmentDetail() {
           </p>
         )}
 
-        {appointment.status === 'CONFIRMED' ? (
+        {appointment.status === 'PENDING' ? (
+          <>
+            <p className="text-sm text-[var(--muted-foreground)] mb-3">
+              Solicitação feita pelo WhatsApp do cliente. O horário está segurado até você decidir.
+            </p>
+            <Button
+              className="w-full h-11 mb-2"
+              onClick={() => void handleDecision('CONFIRMED', 'Agendamento confirmado')}
+              disabled={pending !== null}
+            >
+              {pending === 'Agendamento confirmado' ? 'Processando...' : 'Confirmar agendamento'}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full h-11"
+              onClick={() => void handleDecision('REJECTED', 'Solicitação recusada')}
+              disabled={pending !== null}
+            >
+              {pending === 'Solicitação recusada' ? 'Processando...' : 'Recusar solicitação'}
+            </Button>
+          </>
+        ) : appointment.status === 'CONFIRMED' ? (
           <>
             <Button
               className="w-full h-11"

@@ -3,6 +3,7 @@ import type { z } from "zod"
 import { validate } from "../../middlewares/validate.js"
 import { sendSuccess } from "../../utils/http.js"
 import {
+  decideRequestSchema,
   adminAgendaQuerySchema,
   createBlockSchema,
   createServiceSchema,
@@ -27,6 +28,7 @@ import {
   replaceBusinessHours,
 } from "./schedule.service.js"
 import {
+  decidePendingRequest,
   getAppointmentForAdmin,
   getCustomerSummary,
   listAgenda,
@@ -167,5 +169,22 @@ bookingAdminRouter.get(
       listCustomerAppointments(userId),
     ])
     return sendSuccess(res, { summary, appointments })
+  },
+)
+
+/**
+ * Confirma ou recusa uma solicitação pública pendente.
+ *
+ * Herda `requireAuth + requireActiveAccount + requireRole("ADMIN")` do router:
+ * a decisão é sempre da barbearia, nunca de quem solicitou.
+ */
+bookingAdminRouter.post(
+  "/requests/:id/decide",
+  validate({ params: uuidParamSchema, body: decideRequestSchema }),
+  async (req, res) => {
+    const { id } = req.params as z.infer<typeof uuidParamSchema>
+    const { decision } = req.body as z.infer<typeof decideRequestSchema>
+    const appointment = await decidePendingRequest(req.user!.id, id, decision)
+    return sendSuccess(res, { appointment })
   },
 )

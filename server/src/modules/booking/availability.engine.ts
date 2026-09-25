@@ -6,13 +6,15 @@
  * e utils/time). Manter esta parte pura é o que permite testar a engine com
  * dezenas de cenários sem PostgreSQL nem relógio.
  *
- * Dois conceitos que NÃO se misturam:
+ * Três conceitos que NÃO se misturam:
  *
- *   DURAÇÃO DO SERVIÇO — quanto tempo o atendimento ocupa a cadeira.
- *   INTERVALO DE INÍCIO — de quanto em quanto tempo sugerimos um começo.
+ *   DURAÇÃO DO SERVIÇO — o que o cliente compra e vê (30, 40, 45, 50 min).
+ *   RESERVA OPERACIONAL — o que a agenda bloqueia: max(grade, duração+buffers).
+ *   GRADE DE INÍCIO     — de quanto em quanto tempo sugerimos um começo.
  *
- * A grade de início é regular (de 15 em 15, por padrão); o que varia por
- * serviço é o tamanho do bloco que precisa caber a partir dali.
+ * A grade é regular (40 min por padrão). O que varia por serviço é o tamanho
+ * do bloco reservado a partir dali — e é esse bloco, não a duração, que
+ * decide se dois atendimentos cabem lado a lado.
  */
 
 /** Janela de expediente contínua. Um dia com almoço tem duas. */
@@ -39,7 +41,13 @@ export interface ComputeSlotsInput {
   busy: BusyInterval[]
   /** Duração real do serviço escolhido, vinda do banco. */
   durationMinutes: number
-  /** Grade de início. Não confundir com a duração. */
+  /**
+   * Minutos efetivamente bloqueados a partir do início. Normalmente
+   * `max(grade, duração + buffers)`. Quando ausente, cai na duração — o que
+   * mantém o comportamento antigo para quem chama sem reserva operacional.
+   */
+  reservedMinutes?: number
+  /** Grade de início. Não confundir com duração nem com reserva. */
   slotIntervalMinutes: number
   /** Preparação antes e limpeza depois. Reservas em produção exigem zero. */
   bufferBeforeMinutes?: number
@@ -49,6 +57,13 @@ export interface ComputeSlotsInput {
    * e o relógio. Quem chama resolve isso; a engine só compara.
    */
   earliestStartMinute?: number
+  /**
+   * Oferecer também início no fim de cada período ocupado, além da grade.
+   * Ver BookingRules.adaptiveSchedulingEnabled.
+   */
+  adaptive?: boolean
+  /** Teto de opções devolvidas. Reduz por amostragem, nunca truncando o fim. */
+  maxOptions?: number
 }
 
 /** `true` se [aStart, aEnd) e [bStart, bEnd) se sobrepõem. */
@@ -103,18 +118,25 @@ export function fitsInAnyWindow(
   return windows.some(window => fitsInWindow(window, startMinute, durationMinutes))
 }
 
-/** A criação aceita os mesmos inícios de grade oferecidos pela consulta. */
-export function isStartOnSlotGrid(
-  windows: OpenWindow[],
-  startMinute: number,
-  slotIntervalMinutes: number,
-): boolean {
-  if (!Number.isInteger(slotIntervalMinutes) || slotIntervalMinutes <= 0) return false
-  return windows.some(window =>
-    startMinute >= window.startMinute &&
-    startMinute < window.endMinute &&
-    (startMinute - window.startMinute) % slotIntervalMinutes === 0,
-  )
+/**
+ * Reduz a lista a no máximo `maxOptions` mantendo cobertura do dia inteiro.
+ *
+ * `slice(0, n)` esconderia o fim do expediente — quem procura horário à noite
+ * não veria nenhum. A amostragem é espaçada e determinística, e preserva
+ * sempre o primeiro e o último início.
+ */
+export function limitStartOptions(starts: number[], maxOptions: number): number[] {
+  if (!Number.isFinite(maxOptions) || maxOptions <= 0) return starts
+  if (starts.length <= maxOptions) return starts
+  if (maxOptions === 1) return [starts[0]!]
+
+  const kept: number[] = []
+  const step = (starts.length - 1) / (maxOptions - 1)
+  for (let index = 0; index < maxOptions; index++) {
+    kept.push(starts[Math.round(index * step)]!)
+  }
+  // Arredondamentos podem repetir um índice; a ordem já é crescente.
+  return [...new Set(kept)]
 }
 
 /**
@@ -122,7 +144,17 @@ export function isStartOnSlotGrid(
  *
  * A grade é ancorada no início de CADA janela, não na abertura do dia. Se o
  * almoço termina às 14:10, a tarde começa exatamente em 14:10. Uma grade de
- * 15 minutos contada desde as 09:00 só voltaria a oferecer início às 14:15.
+ * 40 minutos contada desde as 09:00 só voltaria a oferecer início às 14:20.
+ *
+ * Com a política adaptativa ligada, entram também os instantes em que um
+ * atendimento já marcado termina — é o que permite oferecer 09:50 depois de
+ * um serviço de 50 min iniciado às 09:00, em vez de pular para 10:20. São
+ * candidatos adicionais, submetidos exatamente às mesmas checagens: nada é
+ * oferecido sem que o bloco inteiro caiba livre.
+ *
+ * Determinístico: o conjunto de candidatos depende só da configuração, do
+ * expediente e dos períodos ocupados. Duas chamadas com a mesma entrada
+ * devolvem a mesma lista, então dois clientes simultâneos veem o mesmo.
  */
 export function computeSlotStarts(input: ComputeSlotsInput): number[] {
   const {
@@ -133,32 +165,67 @@ export function computeSlotStarts(input: ComputeSlotsInput): number[] {
     bufferBeforeMinutes = 0,
     bufferAfterMinutes = 0,
     earliestStartMinute = Number.NEGATIVE_INFINITY,
+    adaptive = false,
+    maxOptions,
   } = input
+
+  const reservedMinutes = input.reservedMinutes ?? durationMinutes
 
   if (
     !Number.isFinite(durationMinutes) || durationMinutes <= 0 ||
+    !Number.isFinite(reservedMinutes) || reservedMinutes <= 0 ||
     !Number.isFinite(slotIntervalMinutes) || slotIntervalMinutes <= 0
   ) return []
 
+  const ordered = [...windows].sort((a, b) => a.startMinute - b.startMinute)
   const starts: number[] = []
 
-  for (const window of [...windows].sort((a, b) => a.startMinute - b.startMinute)) {
+  for (const window of ordered) {
+    const candidates: number[] = []
+
     for (
       let start = window.startMinute;
-      // O atendimento precisa terminar dentro da MESMA janela: um corte de 50
-      // min às 11:30 terminaria 12:20 e não vale, mesmo havendo expediente à
+      // O SERVIÇO precisa terminar dentro da MESMA janela: um corte de 50 min
+      // às 11:30 terminaria 12:20 e não vale, mesmo havendo expediente à
       // tarde. A agenda não é retomada depois do almoço.
       start + durationMinutes <= window.endMinute;
       start += slotIntervalMinutes
     ) {
+      candidates.push(start)
+    }
+
+    if (adaptive) {
+      // Reancoragem: o fim de cada período ocupado vira candidato, desde que
+      // caia nesta janela e o serviço ainda caiba a partir dali.
+      for (const entry of busy) {
+        // Arredonda para cima: um bloqueio que termina 10:00:01 libera 10:01,
+        // nunca 10:00,0166. Horário oferecido é sempre minuto cheio.
+        const candidate = Math.ceil(entry.endMinute)
+        if (
+          candidate >= window.startMinute &&
+          candidate + durationMinutes <= window.endMinute &&
+          !candidates.includes(candidate)
+        ) {
+          candidates.push(candidate)
+        }
+      }
+    }
+
+    candidates.sort((a, b) => a - b)
+
+    for (const start of candidates) {
       if (start < earliestStartMinute) continue
 
+      // O bloco comparado é a RESERVA, não a duração: é ela que impede o
+      // próximo atendimento de encostar cedo demais.
       const candidate = blockedRange(
         start,
-        durationMinutes,
+        reservedMinutes,
         bufferBeforeMinutes,
         bufferAfterMinutes,
       )
+
+      if (candidate.startMinute < window.startMinute || candidate.endMinute > window.endMinute) continue
 
       const conflict = busy.some(entry =>
         overlaps(candidate.startMinute, candidate.endMinute, entry.startMinute, entry.endMinute),
@@ -169,7 +236,9 @@ export function computeSlotStarts(input: ComputeSlotsInput): number[] {
     }
   }
 
-  return starts
+  starts.sort((a, b) => a - b)
+  const unique = [...new Set(starts)]
+  return maxOptions === undefined ? unique : limitStartOptions(unique, maxOptions)
 }
 
 /**

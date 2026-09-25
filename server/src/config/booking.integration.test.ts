@@ -154,7 +154,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     assert.equal(catalog.body.data.services.length, 0)
 
     const attempt = await call("/booking/appointments", {
-      body: { serviceId: service.id, date: nextTuesday(), startsAt: "10:00" },
+      body: { serviceId: service.id, date: nextTuesday(), startsAt: "10:20" },
       access: customer.access,
     })
     assert.equal(attempt.status, 404)
@@ -212,14 +212,17 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const date = nextTuesday()
 
     const before = await availability.getAvailability(date, service.id)
-    assert.ok(before.slots.some(slot => slot.startsAtClock === "10:00"))
+    assert.ok(before.slots.some(slot => slot.startsAtClock === "10:20"))
 
     await schedule.createBlock({ date, startsAt: "10:00", endsAt: "11:00", reason: "Almoço" })
 
     const after = await availability.getAvailability(date, service.id)
-    assert.equal(after.slots.some(slot => slot.startsAtClock === "09:45"), false)
-    assert.equal(after.slots.some(slot => slot.startsAtClock === "10:45"), false)
-    assert.ok(after.slots.some(slot => slot.startsAtClock === "09:30"))
+    // 10:20 cai dentro do bloqueio; 09:40 reservaria até 10:20 e o invadiria.
+    assert.equal(after.slots.some(slot => slot.startsAtClock === "10:20"), false)
+    assert.equal(after.slots.some(slot => slot.startsAtClock === "09:40"), false)
+    assert.ok(after.slots.some(slot => slot.startsAtClock === "09:00"))
+    // Reancoragem adaptativa: o fim do bloqueio vira início oferecível.
+    assert.ok(after.slots.some(slot => slot.startsAtClock === "11:00"))
     assert.equal(after.slots.some(slot => slot.startsAtClock === "10:00"), false)
     assert.equal(after.slots.some(slot => slot.startsAtClock === "10:30"), false)
     assert.ok(after.slots.some(slot => slot.startsAtClock === "11:00"))
@@ -234,13 +237,15 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       userId: customer.user.id,
       serviceId: service.id,
       date,
-      startsAt: "14:00",
+      startsAt: "14:20",
     })
 
     const result = await availability.getAvailability(date, service.id)
-    assert.equal(result.slots.some(slot => slot.startsAtClock === "14:00"), false)
-    assert.equal(result.slots.some(slot => slot.startsAtClock === "14:15"), false)
-    assert.ok(result.slots.some(slot => slot.startsAtClock === "14:45"))
+    // Reservado 14:20–15:00 (40 min de serviço, reserva operacional de 40).
+    assert.equal(result.slots.some(slot => slot.startsAtClock === "14:20"), false)
+    assert.equal(result.slots.some(slot => slot.startsAtClock === "13:40"), true,
+      "13:40 termina exatamente em 14:20 — encostar não é conflito")
+    assert.ok(result.slots.some(slot => slot.startsAtClock === "15:00"))
   })
 
   // -------------------------------------------------------------------------
@@ -252,14 +257,14 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const customer = await login()
 
     const created = await call("/booking/appointments", {
-      body: { serviceId: service.id, date: nextTuesday(), startsAt: "14:00" },
+      body: { serviceId: service.id, date: nextTuesday(), startsAt: "14:20" },
       access: customer.access,
     })
 
     assert.equal(created.status, 201)
     const appointment = created.body.data.appointment
-    assert.equal(appointment.startsAtClock, "14:00")
-    assert.equal(appointment.endsAtClock, "14:40")
+    assert.equal(appointment.startsAtClock, "14:20")
+    assert.equal(appointment.endsAtClock, "15:00")
     assert.equal(appointment.servicePriceCents, 3500)
     assert.equal(appointment.status, "CONFIRMED")
   })
@@ -275,6 +280,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
     assert.equal(result.status, 400)
     assert.equal(result.body.error.code, "CONFLICT")
+    assert.match(result.body.error.message, /expediente/i)
   })
 
   it("recusa agendamento em horário bloqueado", async () => {
@@ -302,11 +308,11 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       userId: first.user.id,
       serviceId: service.id,
       date,
-      startsAt: "16:00",
+      startsAt: "16:20",
     })
 
     const result = await call("/booking/appointments", {
-      body: { serviceId: service.id, date, startsAt: "16:15" },
+      body: { serviceId: service.id, date, startsAt: "16:20" },
       access: second.access,
     })
 
@@ -365,7 +371,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const other = await login()
     const date = nextTuesday()
 
-    const created = await appointments.createAppointment({
+    const { appointment: created } = await appointments.createAppointment({
       userId: owner.user.id,
       serviceId: service.id,
       date,
@@ -387,7 +393,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const customer = await login()
     const date = nextTuesday()
 
-    const created = await appointments.createAppointment({
+    const { appointment: created } = await appointments.createAppointment({
       userId: customer.user.id,
       serviceId: service.id,
       date,
@@ -421,7 +427,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const owner = await login()
     const attacker = await login()
 
-    const created = await appointments.createAppointment({
+    const { appointment: created } = await appointments.createAppointment({
       userId: owner.user.id,
       serviceId: service.id,
       date: nextTuesday(),
@@ -494,7 +500,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     assert.doesNotMatch(JSON.stringify(slots.body), /userId|phone|fullName|passwordHash/)
 
     const booking = await call("/booking/appointments", {
-      body: { serviceId: service.id, date, startsAt: "10:00" },
+      body: { serviceId: service.id, date, startsAt: "10:20" },
       access: pending.access,
     })
     assert.equal(booking.status, 403)
@@ -504,7 +510,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
   it("sem sessão não agenda", async () => {
     const service = await makeService()
     const result = await call("/booking/appointments", {
-      body: { serviceId: service.id, date: nextTuesday(), startsAt: "10:00" },
+      body: { serviceId: service.id, date: nextTuesday(), startsAt: "10:20" },
     })
     assert.equal(result.status, 401)
   })
@@ -518,7 +524,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       body: {
         serviceId: service.id,
         date: nextTuesday(),
-        startsAt: "10:00",
+        startsAt: "10:20",
         userId: victim.user.id,
       },
       access: customer.access,
@@ -560,11 +566,11 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
     for (const [clock, status] of [
       ["09:00", "COMPLETED"],
-      ["10:00", "CANCELLED"],
-      ["11:00", "NO_SHOW"],
+      ["09:40", "CANCELLED"],
+      ["10:20", "NO_SHOW"],
     ] as const) {
       const customer = await login()
-      const created = await appointments.createAppointment({
+      const { appointment: created } = await appointments.createAppointment({
         userId: customer.user.id,
         serviceId: service.id,
         date,
@@ -590,7 +596,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const customer = await login()
     const admin = await login("ADMIN")
 
-    const created = await appointments.createAppointment({
+    const { appointment: created } = await appointments.createAppointment({
       userId: customer.user.id,
       serviceId: service.id,
       date: nextTuesday(),
@@ -618,16 +624,16 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const admin = await login("ADMIN")
     const date = nextTuesday()
 
-    const created = await Promise.all(
-      ["09:00", "10:00", "11:00"].map(clock =>
-        appointments.createAppointment({
-          userId: customer.user.id,
-          serviceId: service.id,
-          date,
-          startsAt: clock,
-        }),
-      ),
-    )
+    const created: Array<{ id: string }> = []
+    for (const clock of ["09:00", "09:40", "10:20"]) {
+      const placed = await appointments.createAppointment({
+        userId: customer.user.id,
+        serviceId: service.id,
+        date,
+        startsAt: clock,
+      })
+      created.push(placed.appointment)
+    }
 
     await prisma.appointment.update({
       where: { id: created[0]!.id },
@@ -672,27 +678,34 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
     const result = await availability.getAvailability(date, service.id)
     assert.equal(result.slots[0]?.startsAtClock, "10:00")
-    assert.equal(result.slots.at(-1)?.endsAtClock, "12:00")
+    // Grade de 40 min a partir de 10:00: 10:00, 10:40, 11:20. O último termina
+    // 11:50 — 12:00 exigiria começar 11:30, que não está na grade.
+    assert.equal(result.slots.at(-1)?.startsAtClock, "11:20")
+    assert.equal(result.slots.at(-1)?.endsAtClock, "11:50")
   })
   // -------------------------------------------------------------------------
   // Grade de início, janelas e duração (engine nova)
   // -------------------------------------------------------------------------
 
-  it("os inícios seguem a grade de 15 min, não a duração do serviço", async () => {
+  it("os inícios seguem a grade operacional de 40 min, não a duração do serviço", async () => {
     const date = nextTuesday()
     for (const durationMinutes of [30, 40, 45, 50]) {
       const service = await makeService({ name: "Serviço " + durationMinutes, durationMinutes })
       const result = await availability.getAvailability(date, service.id)
 
-      assert.equal(result.slotIntervalMinutes, 15)
+      assert.equal(result.slotIntervalMinutes, 40)
       assert.equal(result.durationMinutes, durationMinutes)
+      // A reserva operacional é o maior entre a grade e a duração.
+      assert.equal(result.reservedMinutes, Math.max(40, durationMinutes))
       for (const slot of result.slots) {
         const [hour, minute] = slot.startsAtClock.split(":").map(Number)
+        // Ancorada na abertura (09:00) — sem atendimentos, não há reancoragem.
         assert.equal(
-          (hour! * 60 + minute!) % 15,
+          (hour! * 60 + minute! - 9 * 60) % 40,
           0,
-          `${slot.startsAtClock} fora da grade (duração ${durationMinutes})`,
+          `${slot.startsAtClock} fora da grade de 40 (duração ${durationMinutes})`,
         )
+        assert.equal(slot.reservedMinutes, Math.max(40, durationMinutes))
       }
     }
   })
@@ -728,11 +741,11 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     )
     assert.ok(clocks.includes("14:00"), "a tarde começa exatamente às 14:00")
     assert.ok(!clocks.some(clock => clock >= "12:00" && clock < "14:00"), "nada durante o almoço")
-    // 11:30 + 50 min terminaria 12:20, atravessando o almoço.
-    assert.ok(!clocks.includes("11:30"))
+    // 11:20 + 50 min terminaria 12:10, atravessando o almoço.
+    assert.ok(!clocks.includes("11:20"))
     assert.equal(clocks.filter(clock => clock < "12:00").at(-1), "11:00")
-    // 19:15 + 50 min passaria das 20:00.
-    assert.equal(clocks.at(-1), "19:00")
+    // 19:20 + 50 min passaria das 20:00; 18:40 termina 19:30 e cabe.
+    assert.equal(clocks.at(-1), "18:40")
   })
 
   it("mudar a duração do serviço vale já na consulta seguinte e não move reservas antigas", async () => {
@@ -795,11 +808,12 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const result = await availability.getAvailability(date, service.id)
     const clocks = result.slots.map(slot => slot.startsAtClock)
 
-    // Intervalo semiaberto: 15:30 encosta no fim e continua livre.
-    assert.ok(clocks.includes("15:30"))
+    // Serviço de 30 min com reserva operacional de 40: ocupa 15:00–15:40.
     assert.ok(!clocks.includes("15:00"))
-    assert.ok(!clocks.includes("15:15"), "15:15–15:45 invadiria a reserva")
-    assert.ok(clocks.includes("14:30"), "14:30–15:00 encosta no início e é válido")
+    // Intervalo semiaberto: 15:40 encosta no fim da reserva e continua livre.
+    assert.ok(clocks.includes("15:40"))
+    // 14:20 reserva até 15:00 e encosta no início — também é válido.
+    assert.ok(clocks.includes("14:20"))
   })
   it("rota real entrega grade, janelas e limites corretos para quatro durações", async () => {
     const admin = await login("ADMIN")
@@ -812,23 +826,27 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       method: "PUT", body: { days }, access: admin.access,
     })).status, 200)
     for (const [durationMinutes, morningLast, afternoonLast] of [
-      [30, "11:30", "19:30"], [40, "11:15", "19:15"],
-      [45, "11:15", "19:15"], [50, "11:00", "19:00"],
+      [30, "11:00", "19:20"], [40, "11:00", "19:20"],
+      [45, "11:00", "18:40"], [50, "11:00", "18:40"],
     ] as const) {
       const service = await makeService({ durationMinutes })
       const response = await call("/booking/availability?date=" + date + "&serviceId=" + service.id)
       assert.equal(response.status, 200)
       const result = response.body.data
-      assert.equal(result.slotIntervalMinutes, 15)
+      assert.equal(result.slotIntervalMinutes, 40)
       assert.equal(result.durationMinutes, durationMinutes)
+      assert.equal(result.reservedMinutes, Math.max(40, durationMinutes))
       assert.deepEqual(result.windows, [
         { opensAt: "09:00", closesAt: "12:00" }, { opensAt: "14:00", closesAt: "20:00" },
       ])
       const slots = result.slots as Array<{
         startsAtClock: string; endsAtClock: string; startsAt: string; endsAt: string
       }>
-      // Derivação independente: floor((tamanho da janela - duração)/15)+1.
-      const count = [180, 360].reduce((sum, length) => sum + Math.floor((length - durationMinutes) / 15) + 1, 0)
+      // Derivação independente: floor((janela - duração)/40)+1 por janela.
+      const count = [180, 360].reduce(
+        (sum, length) => sum + Math.floor((length - durationMinutes) / 40) + 1,
+        0,
+      )
       assert.equal(slots.length, count)
       assert.equal(slots.filter(slot => slot.startsAtClock < "12:00").at(-1)?.startsAtClock, morningLast)
       assert.equal(slots.at(-1)?.startsAtClock, afternoonLast)
@@ -863,7 +881,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       assert.equal(result.status, 200)
       assert.equal(result.body.data.reason, reason)
       assert.equal(result.body.data.open, false)
-      assert.equal(result.body.data.slotIntervalMinutes, 15)
+      assert.equal(result.body.data.slotIntervalMinutes, 40)
       assert.deepEqual(result.body.data.windows, [])
       assert.deepEqual(result.body.data.slots, [])
     }
@@ -885,7 +903,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     // Evita um teste vacuamente aprovado quando a API real roda após fechar.
     const futureDate = nextTuesday()
     const early = await availability.getAvailability(futureDate, service.id, shopWallClockToInstant(futureDate, 1))
-    assert.equal(early.slots[0]?.startsAtClock, "01:15")
+    assert.equal(early.slots[0]?.startsAtClock, "01:20")
     const late = await availability.getAvailability(futureDate, service.id, shopWallClockToInstant(futureDate, 23 * 60 + 59))
     assert.deepEqual(late.slots, [])
     assert.equal(late.reason, "FULLY_BOOKED")
@@ -908,15 +926,20 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       const endsAt = new Date(startsAt.getTime() + 30 * 60_000)
       return prisma.$executeRaw`
         INSERT INTO appointments
-          (id, user_id, service_id, starts_at, ends_at, status, service_name, service_price_cents, updated_at)
+          (id, user_id, service_id, starts_at, ends_at, reserved_ends_at, status, service_name, service_price_cents, updated_at)
         VALUES (${randomUUID()}::uuid, ${customer.user.id}::uuid, ${service.id}::uuid,
-          ${startsAt}, ${endsAt}, ${status}::"AppointmentStatus", 'Corte', 3500, NOW())`
+          ${startsAt}, ${endsAt}, ${endsAt}, ${status}::"AppointmentStatus", 'Corte', 3500, NOW())`
     }
     const results = await Promise.allSettled(Array.from({ length: 10 }, () => insert(9 * 60)))
     assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
     const failures = results.filter(result => result.status === "rejected")
     assert.equal(failures.length, 9)
-    for (const failure of failures) assert.match(String(failure.reason), /23P01|appointments_no_overlap/)
+    // 23P01 é a violação da exclusão. Sob dez inserts simultâneos no mesmo
+    // intervalo o PostgreSQL também pode resolver a disputa abortando uma
+    // transação por deadlock (40P01) — para quem pediu, é a mesma perda de
+    // corrida, e a aplicação traduz os dois em 409 (ver isOverlapViolation).
+    for (const failure of failures)
+      assert.match(String(failure.reason), /23P01|40P01|appointments_no_overlap|deadlock detected/)
     assert.equal(await prisma.appointment.count(), 1)
     assert.equal(await insert(9 * 60 + 30), 1)
     await assert.rejects(() => insert(9 * 60 + 15), /23P01|appointments_no_overlap/)
@@ -933,10 +956,12 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       endsAt: new Date(shopWallClockToInstant(date, 10 * 60).getTime() + 1000), reason: "Fim fracionário",
     } })
     const result = await availability.getAvailability(date, service.id)
-    assert.equal(result.slots.some(slot => slot.startsAtClock === "10:00"), false)
-    assert.ok(result.slots.some(slot => slot.startsAtClock === "10:15"))
+    // 09:40 reservaria até 10:20 e invadiria o bloqueio que termina 10:00:01.
+    assert.equal(result.slots.some(slot => slot.startsAtClock === "09:40"), false)
+    // Reancoragem adaptativa arredonda para o minuto cheio seguinte.
+    assert.ok(result.slots.some(slot => slot.startsAtClock === "10:01"))
     const booking = await call("/booking/appointments", {
-      body: { serviceId: service.id, date, startsAt: "10:00" }, access: customer.access,
+      body: { serviceId: service.id, date, startsAt: "09:40" }, access: customer.access,
     })
     assert.equal(booking.status, 409)
     assert.equal(booking.body.error.code, "CONFLICT")
@@ -972,6 +997,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     await prisma.appointment.create({ data: {
       userId: customer.user.id, serviceId: service.id,
       startsAt: shopWallClockToInstant(previous, 23 * 60 + 59), endsAt: shopWallClockToInstant(date, 30),
+      reservedEndsAt: shopWallClockToInstant(date, 30),
       serviceName: service.name, servicePriceCents: service.priceCents,
     } })
     await prisma.scheduleBlock.create({ data: {
@@ -1037,7 +1063,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       })).status, 400)
     }
     const customer = await login()
-    const created = await appointments.createAppointment({
+    const { appointment: created } = await appointments.createAppointment({
       userId: customer.user.id, serviceId: service.id, date: nextTuesday(), startsAt: "09:00",
     })
     const stored = await prisma.appointment.findUniqueOrThrow({ where: { id: created.id } })
@@ -1051,8 +1077,8 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const result = await call("/booking/appointments", {
       body: { serviceId: service.id, date: nextTuesday(), startsAt: "09:01" }, access: customer.access,
     })
-    assert.equal(result.status, 400)
-    assert.equal(result.body.error.code, "VALIDATION_ERROR")
+    assert.equal(result.status, 409)
+    assert.equal(result.body.error.code, "CONFLICT")
     assert.equal(await prisma.appointment.count(), 0)
   })
 })

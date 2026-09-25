@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-export type BadgeVariant = 'default' | 'confirmed' | 'completed' | 'cancelled' | 'missed' | 'blocked' | 'warning'
+export type BadgeVariant = 'default' | 'confirmed' | 'completed' | 'cancelled' | 'missed' | 'blocked' | 'warning' | 'pending'
 
 const variantClasses: Record<BadgeVariant, string> = {
   default: 'bg-[var(--secondary)] text-[var(--foreground)]',
@@ -11,6 +11,8 @@ const variantClasses: Record<BadgeVariant, string> = {
   missed: 'bg-orange-900/40 text-orange-400 border border-orange-800/40',
   blocked: 'bg-red-900/60 text-red-300 border border-red-700/60',
   warning: 'bg-yellow-900/40 text-yellow-400 border border-yellow-800/40',
+  // Aguardando decisão: dourado sem preenchimento, para não parecer confirmado.
+  pending: 'bg-transparent text-[var(--primary)] border border-dashed border-[var(--primary)]/50',
 }
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -38,10 +40,13 @@ export type { AppointmentStatus } from '@/services/booking'
  * ninguém depende só do tom para entender a situação.
  */
 export const statusConfig: Record<AppointmentStatus, { label: string; variant: BadgeVariant }> = {
+  PENDING: { label: 'Aguardando', variant: 'pending' },
   CONFIRMED: { label: 'Confirmado', variant: 'confirmed' },
   COMPLETED: { label: 'Concluído', variant: 'completed' },
   CANCELLED: { label: 'Cancelado', variant: 'cancelled' },
   NO_SHOW: { label: 'Não compareceu', variant: 'missed' },
+  REJECTED: { label: 'Recusado', variant: 'cancelled' },
+  EXPIRED: { label: 'Expirado', variant: 'cancelled' },
 }
 
 export function StatusBadge({ status }: { status: AppointmentStatus }) {

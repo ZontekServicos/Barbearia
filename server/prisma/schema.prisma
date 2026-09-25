@@ -128,10 +128,16 @@ model ScheduleBlock {
 }
 
 enum AppointmentStatus {
+  /// Solicitação pública aguardando confirmação do barbeiro. Segura o horário.
+  PENDING
   CONFIRMED
   COMPLETED
   CANCELLED
   NO_SHOW
+  /// Recusada pelo barbeiro.
+  REJECTED
+  /// Pendente que passou do prazo sem resposta; o horário volta a ser livre.
+  EXPIRED
 }
 
 /// Agendamento. Um barbeiro nesta fase, então a exclusão de sobreposição é global.
@@ -144,9 +150,23 @@ model Appointment {
   userId    String            @map("user_id") @db.Uuid
   serviceId String            @map("service_id") @db.Uuid
   startsAt  DateTime          @map("starts_at") @db.Timestamptz(3)
+  /// Fim do ATENDIMENTO — é o que o cliente vê. Nunca inflado.
   endsAt    DateTime          @map("ends_at") @db.Timestamptz(3)
+  /// Fim da RESERVA OPERACIONAL: max(grade, duração + buffers) a partir do
+  /// início. É este intervalo que a EXCLUDE protege, porque é ele que a
+  /// agenda realmente consome. Sempre >= endsAt.
+  reservedEndsAt DateTime     @map("reserved_ends_at") @db.Timestamptz(3)
   status    AppointmentStatus @default(CONFIRMED)
   notes     String?           @db.VarChar(280)
+
+  /// Digest SHA-256 do token aleatório entregue a quem criou a solicitação pública.
+  /// É a única forma de consultar o próprio pedido sem sessão — telefone não
+  /// é credencial e nunca dá acesso a reserva nenhuma.
+  publicToken String? @unique @map("public_token") @db.VarChar(64)
+  /// Quando uma solicitação PENDING deixa de segurar o horário.
+  pendingExpiresAt DateTime? @map("pending_expires_at") @db.Timestamptz(3)
+  /// Quem confirmou ou recusou, e quando.
+  decidedAt   DateTime? @map("decided_at") @db.Timestamptz(3)
 
   /// Congelados no momento da reserva: alterar o preço do serviço depois não
   /// pode reescrever o histórico de quem já agendou.
@@ -167,6 +187,7 @@ model Appointment {
   @@index([startsAt])
   @@index([userId, startsAt])
   @@index([status, startsAt])
+  @@index([status, pendingExpiresAt])
   @@map("appointments")
 }
 
