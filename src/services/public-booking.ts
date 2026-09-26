@@ -39,12 +39,46 @@ export async function requestBooking(
   })
 }
 
-export async function getBookingRequest(token: string): Promise<Appointment> {
-  const data = await apiRequest<{ appointment: Appointment }>(
+/** Situação do pagamento, como o cliente pode vê-la. */
+export interface PaymentView {
+  status: 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED' | 'CANCELED'
+  amountCents: number
+  /** "35,00" — já formatado pelo servidor. */
+  amountFormatted: string
+  currency: string
+  mode: 'FULL' | 'DEPOSIT'
+  /** Quanto falta da janela de pagamento. Nunca negativo. */
+  expiresInSeconds: number
+  expiresAt: string
+  checkoutUrl: string | null
+  /** Pix copia-e-cola. Público por natureza. */
+  pixQrCode: string | null
+}
+
+/**
+ * O pedido inteiro, como quem tem o token pode vê-lo.
+ *
+ * `whatsappUrl` vem pronto do backend e só existe quando o agendamento está
+ * CONFIRMED — o destinatário é o número da barbearia e a mensagem é montada a
+ * partir do banco, então o navegador não tem como anunciar como confirmado algo
+ * que não foi pago.
+ */
+export interface BookingRequestView {
+  appointment: Appointment
+  /** "EC-7F3K2Q". Existe a partir da aprovação. */
+  reference: string | null
+  payment: PaymentView | null
+  whatsappUrl: string | null
+}
+
+export async function getBookingRequest(
+  token: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<BookingRequestView> {
+  return apiRequest<BookingRequestView>(
     `/booking/requests/${encodeURIComponent(token)}`,
-    { skipRefresh: true },
+    { skipRefresh: true, ...(options.signal ? { signal: options.signal } : {}) },
   )
-  return data.appointment
 }
 
 /**
@@ -88,6 +122,10 @@ export interface BookingPolicy {
   baseSlotMinutes: number
   pendingTtlMinutes: number
   minimumAdvanceMinutes: number
+  /** Confirmar exige pagamento nesta instalação. */
+  paymentRequired: boolean
+  /** Janela para pagar depois da aprovação, em minutos. */
+  paymentWindowMinutes: number
 }
 
 /**

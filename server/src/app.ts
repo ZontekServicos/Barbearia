@@ -12,6 +12,11 @@ import { bookingRouter } from "./modules/booking/booking.routes.js"
 import { AppError, ErrorCodes } from "./utils/errors.js"
 import { sendSuccess } from "./utils/http.js"
 
+/** Corpo cru, preenchido só para o webhook de pagamento (ver express.json). */
+export interface RequestWithRawBody {
+  rawBody?: string
+}
+
 export function createApp(): Express {
   const app = express()
 
@@ -38,7 +43,26 @@ export function createApp(): Express {
     }),
   )
 
-  app.use(express.json({ limit: "100kb" }))
+  app.use(
+    express.json({
+      limit: "100kb",
+      /**
+       * Guarda os BYTES do corpo apenas no webhook de pagamento.
+       *
+       * A assinatura do provedor é calculada sobre os bytes exatos que ele
+       * enviou. Reserializar o objeto já parseado muda espaços e ordem de
+       * chaves, e a assinatura deixa de bater — por isso o corpo cru.
+       *
+       * Restrito a esta rota de propósito: guardar o corpo de toda requisição
+       * duplicaria em memória payloads que ninguém vai reler.
+       */
+      verify: (req, _res, buffer) => {
+        if (req.url?.startsWith("/booking/payments/webhook")) {
+          ;(req as RequestWithRawBody).rawBody = buffer.toString("utf8")
+        }
+      },
+    }),
+  )
   app.use(cookieParser())
   app.use(globalRateLimit)
 

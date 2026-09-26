@@ -23,6 +23,9 @@ Object.assign(process.env, {
   JWT_ACCESS_SECRET: randomBytes(48).toString("hex"),
   FRONTEND_URL: "http://localhost:8443",
   TRUST_PROXY_HOPS: "0",
+  // Número configurado, provedor de pagamento AUSENTE: é a configuração de
+  // produção, e é nela que a confirmação pelo WhatsApp precisa funcionar.
+  BARBERSHOP_WHATSAPP_NUMBER: "+5571999990000",
 })
 
 let prisma: typeof import("./prisma.js").prisma
@@ -986,5 +989,205 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
     // E em nenhum momento houve sessão de cliente.
     assert.equal(await prisma.refreshToken.count(), 0)
+  })
+  // -------------------------------------------------------------------------
+  // Regressão: "Dados inválidos." em produção
+  //
+  // Frontend e backend sobem separadamente (docs/deployment.md). Quando só o
+  // backend sobe, o navegador segue rodando o pacote anterior, que manda nome e
+  // telefone no envio final em vez do handle. O strictObject recusava os dois
+  // campos e ainda cobrava o handle ausente — 400 "Dados inválidos.", exatamente
+  // no último clique do fluxo.
+  // -------------------------------------------------------------------------
+
+  it("corpo do frontend anterior (nome + telefone) cria a solicitação, sem 'Dados inválidos.'", async () => {
+    const service = await makeService()
+    const date = nextTuesday()
+
+    // Byte por byte o corpo que o pacote de eefe0ee envia.
+    const response = await call("/booking/requests", {
+      body: {
+        phone: "(71) 98888-1234",
+        fullName: "Guilherme Santana",
+        serviceId: service.id,
+        date,
+        startsAt: "09:00",
+      },
+    })
+
+    assert.equal(response.status, 201)
+    assert.notEqual(response.body.error?.message, "Dados inválidos.")
+    assert.equal(response.body.data.appointment.status, "PENDING")
+    assert.equal(response.body.data.awaitingApproval, true)
+    assert.match(response.body.data.publicToken, /^[A-Za-z0-9_-]{43}$/)
+
+    // Passou pelo MESMO caminho: contato gravado, sem senha e sem sessão.
+    const contact = await prisma.user.findUniqueOrThrow({ where: { phone: "+5571988881234" } })
+    assert.equal(contact.passwordHash, null)
+    assert.equal(contact.role, "CUSTOMER")
+    assert.equal(await prisma.refreshToken.count(), 0)
+
+    // O handle emitido internamente foi consumido: não sobra capacidade viva.
+    const handles = await prisma.publicContactHandle.findMany()
+    assert.equal(handles.length, 1)
+    assert.notEqual(handles[0]!.consumedAt, null)
+  })
+
+  it("a forma anterior preserva as mesmas garantias: nome, ADMIN e preço do banco", async () => {
+    const service = await makeService()
+    const admin = await prisma.user.create({
+      data: {
+        phone: "+5571988881234",
+        fullName: "Erick",
+        role: "ADMIN",
+        status: "ACTIVE",
+        passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$abc$def",
+      },
+    })
+
+    const response = await call("/booking/requests", {
+      body: {
+        phone: "(71) 98888-1234",
+        fullName: "Impostor",
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+        // Preço e duração continuam sendo do servidor.
+        servicePriceCents: 1,
+      },
+    })
+    // Campo extra segue recusado: a compatibilidade não afrouxa o strictObject.
+    assert.equal(response.status, 400)
+
+    const accepted = await call("/booking/requests", {
+      body: {
+        phone: "(71) 98888-1234",
+        fullName: "Impostor",
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+      },
+    })
+    assert.equal(accepted.status, 201)
+    assert.equal(accepted.body.data.appointment.servicePriceCents, 3500)
+
+    const after = await prisma.user.findUniqueOrThrow({ where: { id: admin.id } })
+    assert.equal(after.role, "ADMIN")
+    assert.equal(after.status, "ACTIVE")
+    assert.equal(after.fullName, "Erick", "nome existente não é sobrescrito")
+    assert.equal(after.passwordHash, admin.passwordHash)
+  })
+
+  it("as duas formas juntas, ou nenhuma, são recusadas", async () => {
+    const service = await makeService()
+    const registered = await registerContact()
+    const selection = { serviceId: service.id, date: nextTuesday(), startsAt: "09:00" }
+
+    for (const contact of [
+      // Handle e telefone ao mesmo tempo: ambiguidade não é aceita.
+      { contactHandle: registered.body.data.contactHandle, phone: "(71) 98888-1234", fullName: "Cliente" },
+      // Nenhuma identificação.
+      {},
+      // Forma anterior incompleta.
+      { phone: "(71) 98888-1234" },
+      { fullName: "Cliente" },
+    ]) {
+      const response = await call("/booking/requests", { body: { ...contact, ...selection } })
+      assert.equal(response.status, 400, JSON.stringify(contact))
+    }
+    assert.equal(await prisma.appointment.count(), 0)
+  })
+
+  // -------------------------------------------------------------------------
+  // Regressão: confirmação pelo WhatsApp SEM pagamento configurado
+  //
+  // Esta é a configuração de produção — pagamento é opcional e o padrão é estar
+  // desligado. A referência pública nascia apenas no caminho de pagamento, então
+  // um agendamento confirmado aqui ficava sem referência e o link do WhatsApp
+  // nunca aparecia: exatamente o caso comum sem a funcionalidade.
+  // -------------------------------------------------------------------------
+
+  it("sem pagamento, aprovar confirma direto e libera a confirmação pelo WhatsApp", async () => {
+    const service = await makeService()
+    const admin = await prisma.user.create({
+      data: { phone: phone(), fullName: "Erick", role: "ADMIN", status: "ACTIVE" },
+    })
+    const session = await tokens.issueSession(admin.id)
+
+    const registered = await registerContact({ fullName: "Guilherme Santana" })
+    const created = await call("/booking/requests", {
+      body: {
+        contactHandle: registered.body.data.contactHandle,
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+      },
+    })
+    assert.equal(created.status, 201)
+    const appointmentId = created.body.data.appointment.id
+    const publicToken = created.body.data.publicToken
+
+    // Aguardando o barbeiro: nada de WhatsApp ainda.
+    const pending = await call(`/booking/requests/${publicToken}`)
+    assert.equal(pending.body.data.appointment.status, "PENDING")
+    assert.equal(pending.body.data.whatsappUrl, null)
+    assert.equal(pending.body.data.payment, null, "sem provedor, sem cobrança")
+
+    const decided = await call(`/admin/requests/${appointmentId}/decide`, {
+      access: session.accessToken,
+      body: { decision: "CONFIRMED" },
+    })
+    assert.equal(decided.status, 200)
+    // Sem provedor configurado, aprovar confirma DIRETO — comportamento anterior.
+    assert.equal(decided.body.data.appointment.status, "CONFIRMED")
+    assert.equal(await prisma.payment.count(), 0)
+
+    const view = await call(`/booking/requests/${publicToken}`)
+    assert.equal(view.body.data.appointment.status, "CONFIRMED")
+    assert.equal(view.body.data.payment, null)
+    assert.match(view.body.data.reference, /^EC-[23456789ABCDEFGHJKLMNPQRTUVWXYZ]{6}$/)
+
+    const url: string = view.body.data.whatsappUrl
+    assert.ok(url, "confirmado com número configurado precisa oferecer o WhatsApp")
+    assert.ok(url.startsWith("https://wa.me/5571999990000?text="), url.slice(0, 48))
+
+    const message = decodeURIComponent(url.split("?text=")[1]!)
+    assert.match(message, /confirmado/i)
+    assert.ok(message.includes(view.body.data.reference))
+    assert.ok(message.includes("Corte"))
+    assert.ok(message.includes("09:00"))
+    // Sem cobrança, a mensagem não fala de pagamento.
+    assert.ok(!message.includes("Pagamento"), "sem cobrança, sem linha de pagamento")
+    // E nenhum segredo circula.
+    assert.ok(!message.includes(publicToken))
+    assert.ok(!message.includes(appointmentId))
+    assert.doesNotMatch(message, /v2\.|eyJ|Bearer|secret/i)
+  })
+
+  it("sem pagamento, recusar não cria referência nem WhatsApp", async () => {
+    const service = await makeService()
+    const admin = await prisma.user.create({
+      data: { phone: phone(), fullName: "Erick", role: "ADMIN", status: "ACTIVE" },
+    })
+    const session = await tokens.issueSession(admin.id)
+    const registered = await registerContact()
+    const created = await call("/booking/requests", {
+      body: {
+        contactHandle: registered.body.data.contactHandle,
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+      },
+    })
+    const rejected = await call(`/admin/requests/${created.body.data.appointment.id}/decide`, {
+      access: session.accessToken,
+      body: { decision: "REJECTED" },
+    })
+    assert.equal(rejected.status, 200)
+
+    const view = await call(`/booking/requests/${created.body.data.publicToken}`)
+    assert.equal(view.body.data.appointment.status, "REJECTED")
+    assert.equal(view.body.data.reference, null, "recusado não recebe referência")
+    assert.equal(view.body.data.whatsappUrl, null)
   })
 })

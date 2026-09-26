@@ -693,9 +693,11 @@ function ContactStep({
  */
 function SuccessStep({
   result,
+  policy,
   onRestart,
 }: {
   result: BookingRequestResult
+  policy: BookingPolicy | null
   onRestart: () => void
 }) {
   const { appointment, awaitingApproval, pendingTtlMinutes } = result
@@ -735,6 +737,13 @@ function SuccessStep({
               por {Math.round(pendingTtlMinutes / 60)}h enquanto isso — depois
               disso ele volta a ficar disponível para outras pessoas.
             </p>
+            {policy?.paymentRequired && (
+              <p className="text-sm text-[var(--foreground)] mt-2">
+                Assim que a barbearia aprovar, você terá{' '}
+                {policy.paymentWindowMinutes} minutos para pagar e confirmar.
+                Acompanhe por aqui.
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -748,7 +757,17 @@ function SuccessStep({
       </div>
 
       <div className="space-y-3">
-        <Button className="w-full h-11" onClick={onRestart}>
+        {/*
+          O caminho principal daqui é ACOMPANHAR, não agendar de novo: é onde a
+          aprovação, o pagamento e a confirmação aparecem. O token vai na URL
+          para o link continuar valendo em outro dispositivo.
+        */}
+        <Button className="w-full h-11" asChild>
+          <a href={`/agendamento/${encodeURIComponent(result.publicToken)}`}>
+            Acompanhar meu agendamento
+          </a>
+        </Button>
+        <Button variant="outline" className="w-full h-11" onClick={onRestart}>
           Fazer outro agendamento
         </Button>
         <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" asChild>
@@ -1022,7 +1041,7 @@ export default function Schedule() {
   }
 
   if (step === 'success' && result) {
-    return <SuccessStep result={result} onRestart={restart} />
+    return <SuccessStep result={result} policy={policy} onRestart={restart} />
   }
 
   // A retomada é oferecida antes de qualquer etapa, e só uma vez.

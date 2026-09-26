@@ -10,6 +10,8 @@ import { toPublicAppointment, type PublicAppointment } from "./booking.mapper.js
 import { CONTACT_HANDLE_TTL_MS, invalidContactHandle, issueContactHandle, readContactHandle } from "./contact-handle.js"
 import { takeContactRegistrationQuota } from "./public-quota.js"
 import { maskPhoneForDisplay } from "../../utils/phone.js"
+import { toPublicPayment, type PublicPayment } from "../payment/payment.service.js"
+import { buildWhatsappLink } from "./whatsapp.js"
 
 /**
  * Quantas reservas futuras vivas um mesmo telefone pode acumular.
@@ -20,14 +22,26 @@ import { maskPhoneForDisplay } from "../../utils/phone.js"
  */
 const MAX_ACTIVE_REQUESTS_PER_PHONE = 3
 
-export interface BookingRequestInput {
-  /** Handle emitido na etapa de cadastro. Não é sessão (ver contact-handle). */
-  contactHandle: string
+export interface BookingRequestSelection {
   serviceId: string
   date: string
   startsAt: string
   notes?: string
 }
+
+/**
+ * De quem é o pedido.
+ *
+ * `contactHandle` é a forma atual: o contato já passou pela etapa de cadastro.
+ * `fullName`+`phone` é a forma anterior, mantida porque o frontend é
+ * implantado separadamente do backend e pode estar uma versão atrás. As duas
+ * terminam no mesmo caminho — a segunda simplesmente faz o cadastro primeiro.
+ */
+export type BookingRequestContact =
+  | { contactHandle: string }
+  | { fullName: string; phone: string }
+
+export type BookingRequestInput = BookingRequestSelection & BookingRequestContact
 
 export interface ContactRegistrationInput {
   previousHandle?: string
@@ -42,6 +56,17 @@ export interface ContactRegistration {
   fullName: string
   /** "(71) *****-6090" — nunca o número inteiro de volta. */
   phoneMasked: string
+}
+
+/** O que quem tem o token pode ver: o próprio pedido, e nada além dele. */
+export interface PublicRequestView {
+  appointment: PublicAppointment
+  /** Referência curta, quando já existe (nasce na aprovação). */
+  reference: string | null
+  /** Cobrança, quando há. `null` sem pagamento configurado. */
+  payment: PublicPayment | null
+  /** Link de confirmação pelo WhatsApp. `null` até estar CONFIRMED. */
+  whatsappUrl: string | null
 }
 
 export interface BookingRequestResult {
@@ -156,9 +181,18 @@ export async function requestPublicAppointment(
   input: BookingRequestInput,
   now: Date = new Date(),
 ): Promise<BookingRequestResult> {
+  // Pedido da forma anterior: nome e telefone no lugar do handle. Fazemos o
+  // cadastro aqui, com as mesmas regras, e seguimos pelo caminho único abaixo.
+  // Nada é duplicado — é literalmente a etapa de cadastro sendo executada.
+  const contactHandle =
+    "contactHandle" in input
+      ? input.contactHandle
+      : (await registerPublicContact({ fullName: input.fullName, phone: input.phone }, now))
+          .contactHandle
+
   // O handle diz de quem é o pedido. O contato já foi validado e gravado na
   // etapa de cadastro; aqui só confirmamos que ele continua apto.
-  const tokenHash = readContactHandle(input.contactHandle, now)
+  const tokenHash = readContactHandle(contactHandle, now)
   const handle = await prisma.publicContactHandle.findUnique({ where: { tokenHash } })
   if (!handle || handle.consumedAt || handle.expiresAt <= now) throw invalidContactHandle()
   const contactId = handle.userId
@@ -198,6 +232,9 @@ export async function requestPublicAppointment(
           OR: [
             { status: "CONFIRMED" },
             { status: "PENDING", pendingExpiresAt: { gt: now } },
+            // Aprovado e pagando também conta como reserva viva: senão o mesmo
+            // telefone acumularia pedidos além do limite durante o pagamento.
+            { status: "AWAITING_PAYMENT", pendingExpiresAt: { gt: now } },
           ],
         },
       })
@@ -227,26 +264,59 @@ export async function requestPublicAppointment(
 export async function getPublicRequest(
   token: string,
   now: Date = new Date(),
-): Promise<PublicAppointment> {
+): Promise<PublicRequestView> {
   const appointment = await prisma.appointment.findUnique({
     where: { publicToken: digestPublicToken(token) },
+    include: { payment: true, user: { select: { fullName: true } } },
   })
 
   if (!appointment) {
     throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
   }
 
-  // Pendente vencida é apresentada como expirada mesmo antes de alguém
-  // reservar o horário: a pessoa precisa saber que o pedido caducou.
-  if (
-    appointment.status === "PENDING" &&
+  // Prazo vencido é apresentado como expirado mesmo antes de alguém reservar o
+  // horário: a pessoa precisa saber que o pedido caducou. Vale para os dois
+  // estados com prazo — aguardando o barbeiro e aguardando o pagamento.
+  const lapsed =
+    (appointment.status === "PENDING" || appointment.status === "AWAITING_PAYMENT") &&
     appointment.pendingExpiresAt !== null &&
     appointment.pendingExpiresAt.getTime() <= now.getTime()
-  ) {
-    return toPublicAppointment({ ...appointment, status: "EXPIRED" })
-  }
 
-  return toPublicAppointment(appointment)
+  const view = toPublicAppointment(lapsed ? { ...appointment, status: "EXPIRED" } : appointment)
+  const paid = appointment.payment?.status === "PAID"
+
+  return {
+    appointment: view,
+    reference: appointment.publicReference,
+    payment:
+      appointment.payment && !lapsed
+        ? toPublicPayment(appointment.payment, now)
+        : appointment.payment
+          ? toPublicPayment({ ...appointment.payment, status: "EXPIRED" }, now)
+          : null,
+    /**
+     * Link do WhatsApp SÓ com o agendamento confirmado.
+     *
+     * Enquanto o pedido aguarda o barbeiro ou o pagamento, não há confirmação
+     * para levar a ninguém — oferecer o botão antes seria convidar a pessoa a
+     * anunciar como confirmado algo que não está.
+     */
+    whatsappUrl:
+      view.status === "CONFIRMED" && appointment.publicReference
+        ? buildWhatsappLink({
+            serviceName: view.serviceName,
+            date: view.date,
+            startsAtClock: view.startsAtClock,
+            reference: appointment.publicReference,
+            ...(paid && appointment.payment
+              ? { amountFormatted: toPublicPayment(appointment.payment, now).amountFormatted }
+              : {}),
+            ...(appointment.user.fullName
+              ? { firstName: appointment.user.fullName.split(" ")[0]! }
+              : {}),
+          })
+        : null,
+  }
 }
 
 /** Quanto tempo uma solicitação pendente segura o horário, para a interface. */

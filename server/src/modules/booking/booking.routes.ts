@@ -13,10 +13,14 @@ import {
   uuidParamSchema,
 } from "./booking.schemas.js"
 import {
+  paymentWebhookRateLimit,
   publicBookingRateLimit,
   publicContactRateLimit,
   publicRequestLookupRateLimit,
 } from "../../middlewares/rate-limit.js"
+import { processPaymentWebhook } from "../payment/payment.service.js"
+import { paymentsEnabled } from "../../config/env.js"
+import type { RequestWithRawBody } from "../../app.js"
 import {
   getPublicRequest,
   registerPublicContact,
@@ -140,7 +144,10 @@ bookingRouter.post(
     const body = req.body as z.infer<typeof publicBookingRequestSchema>
     await enforcePublicIpQuota("requests", req.ip ?? "unknown")
     const result = await requestPublicAppointment({
-      contactHandle: body.contactHandle,
+      // O schema já garantiu que veio exatamente uma das duas formas.
+      ...(body.contactHandle
+        ? { contactHandle: body.contactHandle }
+        : { fullName: body.fullName!, phone: body.phone! }),
       serviceId: body.serviceId,
       date: body.date,
       startsAt: body.startsAt,
@@ -172,9 +179,34 @@ bookingRouter.get(
   validate({ params: publicTokenParamSchema }),
   async (req, res) => {
     const { token } = req.params as z.infer<typeof publicTokenParamSchema>
-    return sendSuccess(res, { appointment: await getPublicRequest(token) })
+    // Traz o pedido, a cobrança (quando há) e o link do WhatsApp (só quando
+    // confirmado). Nenhum dado de outra reserva, nenhum histórico.
+    return sendSuccess(res, await getPublicRequest(token))
   },
 )
+
+/**
+ * Notificação do provedor de pagamento — a ÚNICA forma de confirmar dinheiro.
+ *
+ * Pública por necessidade: quem chama é o provedor, que não tem sessão nossa.
+ * O que a protege não é autenticação de usuário, é a assinatura sobre os bytes
+ * do corpo, validada pelo adaptador antes de qualquer acesso ao banco.
+ *
+ * Responde 200 mesmo quando a notificação é descartada (repetida, valor
+ * divergente, cobrança desconhecida): provedor que recebe erro reenvia em
+ * laço, e esses casos já foram processados — a decisão está gravada em
+ * `payment_webhook_events.outcome`. Assinatura inválida é o caso que responde
+ * erro, porque aí não houve notificação nenhuma.
+ */
+bookingRouter.post("/payments/webhook", paymentWebhookRateLimit, async (req, res) => {
+  const { outcome } = await processPaymentWebhook({
+    headers: req.headers as Record<string, string | undefined>,
+    rawBody: (req as unknown as RequestWithRawBody).rawBody ?? "",
+  })
+  // Só o reconhecimento. Nada sobre o agendamento, o cliente ou o valor: a
+  // resposta de um webhook não é lugar de devolver dado de ninguém.
+  return sendSuccess(res, { received: true, outcome })
+})
 
 /**
  * Política pública da agenda.
@@ -190,6 +222,15 @@ bookingRouter.get("/policy", async (_req, res) => {
     baseSlotMinutes: BookingRules.baseSlotMinutes,
     pendingTtlMinutes: BookingRules.pendingRequestTtlMinutes,
     minimumAdvanceMinutes: BookingRules.minimumAdvanceMinutes,
+    /**
+     * Confirmar exige pagamento nesta instalação?
+     *
+     * A tela precisa saber antes de prometer qualquer coisa: com pagamento, a
+     * aprovação do barbeiro leva a "aguardando pagamento"; sem, leva direto a
+     * confirmado. Servido daqui em vez de duplicado no navegador.
+     */
+    paymentRequired: paymentsEnabled,
+    paymentWindowMinutes: BookingRules.paymentWindowMinutes,
   })
 })
 

@@ -12,6 +12,7 @@ import {
   updateAppointmentStatus,
   type AdminAppointment,  decideBookingRequest,
 } from '@/services/admin-booking'
+import { getBookingPolicy, type BookingPolicy } from '@/services/public-booking'
 
 const MONTHS = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -27,6 +28,20 @@ export default function AppointmentDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [appointment, setAppointment] = useState<AdminAppointment | null>(null)
+  /**
+   * Com pagamento configurado, aprovar NÃO confirma: abre a janela de
+   * pagamento. O botão precisa dizer o que realmente vai acontecer, então a
+   * política vem do servidor em vez de o texto ser chutado aqui.
+   */
+  const [policy, setPolicy] = useState<BookingPolicy | null>(null)
+  useEffect(() => {
+    let alive = true
+    void getBookingPolicy()
+      .then(next => { if (alive) setPolicy(next) })
+      // Sem política, o texto cai no genérico. Não é motivo para travar a tela.
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -178,13 +193,24 @@ export default function AppointmentDetail() {
           <>
             <p className="text-sm text-[var(--muted-foreground)] mb-3">
               Solicitação feita pelo WhatsApp do cliente. O horário está segurado até você decidir.
+              {policy?.paymentRequired && (
+                <>
+                  {' '}Aprovar libera o pagamento: o cliente terá{' '}
+                  {policy.paymentWindowMinutes} minutos para pagar, e a confirmação
+                  acontece sozinha quando o pagamento entrar.
+                </>
+              )}
             </p>
             <Button
               className="w-full h-11 mb-2"
               onClick={() => void handleDecision('CONFIRMED', 'Agendamento confirmado')}
               disabled={pending !== null}
             >
-              {pending === 'Agendamento confirmado' ? 'Processando...' : 'Confirmar agendamento'}
+              {pending === 'Agendamento confirmado'
+                ? 'Processando...'
+                : policy?.paymentRequired
+                  ? 'Aprovar e enviar cobrança'
+                  : 'Confirmar agendamento'}
             </Button>
             <Button
               variant="outline"
@@ -224,6 +250,20 @@ export default function AppointmentDetail() {
               {pending === 'Agendamento cancelado' ? 'Processando...' : 'Cancelar agendamento'}
             </Button>
           </>
+        ) : appointment.status === 'AWAITING_PAYMENT' ? (
+          <div className="py-2">
+            {/*
+              Nada a fazer aqui, e isso é intencional: quem confirma é o
+              pagamento validado pelo backend. Um botão de "confirmar mesmo
+              assim" seria exatamente a confirmação sem dinheiro que o desenho
+              evita. Cancelar continua possível pela agenda.
+            */}
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Aprovado. Aguardando o pagamento do cliente — a confirmação é
+              automática quando o pagamento for aprovado pelo provedor. Se o
+              prazo terminar, o horário volta a ficar livre.
+            </p>
+          </div>
         ) : (
           <div className="text-center py-4">
             <p className="text-sm text-[var(--muted-foreground)]">Este agendamento já foi encerrado.</p>

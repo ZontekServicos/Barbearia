@@ -131,6 +131,10 @@ model ScheduleBlock {
 enum AppointmentStatus {
   /// Solicitação pública aguardando confirmação do barbeiro. Segura o horário.
   PENDING
+  /// Aprovada pelo barbeiro, aguardando o pagamento do cliente. Segura o
+  /// horário até `pendingExpiresAt` — a janela de pagamento. Estado do
+  /// AGENDAMENTO; o estado do dinheiro vive em `Payment.status`.
+  AWAITING_PAYMENT
   CONFIRMED
   COMPLETED
   CANCELLED
@@ -169,6 +173,11 @@ model Appointment {
   /// Quem confirmou ou recusou, e quando.
   decidedAt   DateTime? @map("decided_at") @db.Timestamptz(3)
 
+  /// Referência curta que o cliente pode dizer em voz alta ("EC-7F3K2Q").
+  /// Existe para a mensagem do WhatsApp e para o balcão NÃO precisarem do
+  /// publicToken, que é credencial de consulta e não pode circular.
+  publicReference String? @unique @map("public_reference") @db.VarChar(16)
+
   /// Congelados no momento da reserva: alterar o preço do serviço depois não
   /// pode reescrever o histórico de quem já agendou.
   serviceName       String @map("service_name") @db.VarChar(80)
@@ -184,6 +193,7 @@ model Appointment {
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
   service Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  payment Payment?
 
   @@index([startsAt])
   @@index([userId, startsAt])
@@ -228,4 +238,87 @@ model PublicBookingQuota {
   expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
   @@index([expiresAt])
   @@map("public_booking_quotas")
+}
+
+// ---------------------------------------------------------------------------
+// Pagamento
+//
+// Estado do DINHEIRO, deliberadamente separado do estado do AGENDAMENTO. Um
+// pagamento recusado não apaga a reserva, e uma reserva cancelada não reescreve
+// o histórico financeiro. A transição final para CONFIRMED exige os dois:
+// aprovação do barbeiro E `Payment.status = PAID`.
+// ---------------------------------------------------------------------------
+
+enum PaymentStatus {
+  /// Cobrança criada no provedor, ainda não paga.
+  PENDING
+  /// Confirmada PELO BACKEND a partir da notificação do provedor. Nunca a
+  /// partir de redirect, query string ou botão "já paguei".
+  PAID
+  /// Provedor recusou.
+  FAILED
+  /// Janela de pagamento venceu sem confirmação. O horário é liberado.
+  EXPIRED
+  /// Cancelada junto com a reserva.
+  CANCELED
+}
+
+enum PaymentMode {
+  /// Cobra o valor inteiro do serviço.
+  FULL
+  /// Cobra um sinal: percentual ou valor fixo, conforme a configuração.
+  DEPOSIT
+}
+
+model Payment {
+  id            String @id @default(uuid()) @db.Uuid
+  appointmentId String @unique @map("appointment_id") @db.Uuid
+  /// Nome do adaptador que criou a cobrança ("manual", "mercadopago", ...).
+  provider          String  @db.VarChar(40)
+  /// Identificador da cobrança NO provedor. Usado para conferir a notificação.
+  providerPaymentId String? @map("provider_payment_id") @db.VarChar(120)
+  mode              PaymentMode
+  /// Em centavos, calculado no servidor a partir de Service.priceCents.
+  /// O valor enviado pelo navegador nunca é considerado.
+  amountCents Int           @map("amount_cents")
+  currency    String        @default("BRL") @db.VarChar(3)
+  status      PaymentStatus @default(PENDING)
+  /// Fim da janela de pagamento. Espelha `Appointment.pendingExpiresAt`.
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  paidAt    DateTime? @map("paid_at") @db.Timestamptz(3)
+  /// Dados de checkout devolvidos pelo provedor — endereço público e código
+  /// Pix copia-e-cola. Nunca token, segredo ou credencial do provedor.
+  checkoutUrl String? @map("checkout_url") @db.VarChar(500)
+  pixQrCode   String? @map("pix_qr_code")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  appointment Appointment           @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  events      PaymentWebhookEvent[]
+
+  /// Uma cobrança do provedor corresponde a no máximo um registro nosso.
+  @@unique([provider, providerPaymentId])
+  @@index([status, expiresAt])
+  @@map("payments")
+}
+
+/// Notificação de provedor já processada.
+///
+/// A unicidade (provider, externalId) é o que torna o webhook IDEMPOTENTE: a
+/// mesma notificação reenviada dez vezes grava uma linha e é descartada nas
+/// outras nove, dentro da transação que aplica o efeito.
+model PaymentWebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  provider   String   @db.VarChar(40)
+  externalId String   @map("external_id") @db.VarChar(200)
+  paymentId  String?  @map("payment_id") @db.Uuid
+  /// Resultado do processamento, para auditoria de notificação fora de ordem.
+  outcome    String   @db.VarChar(40)
+  receivedAt DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalId])
+  @@index([paymentId])
+  @@map("payment_webhook_events")
 }

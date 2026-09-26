@@ -160,8 +160,15 @@ export function toPublicAppointment(appointment: AppointmentRecord): PublicAppoi
     reservedMinutes: Math.round(
       (appointment.reservedEndsAt.getTime() - appointment.startsAt.getTime()) / 60_000,
     ),
-    status: appointment.status === "PENDING" && appointment.pendingExpiresAt && appointment.pendingExpiresAt.getTime() <= Date.now()
-      ? "EXPIRED" : appointment.status,
+    // Prazo vencido é apresentado como expirado mesmo antes de alguém reservar
+    // o horário — vale para os dois estados com prazo: aguardando o barbeiro e
+    // aguardando o pagamento.
+    status:
+      (appointment.status === "PENDING" || appointment.status === "AWAITING_PAYMENT") &&
+      appointment.pendingExpiresAt &&
+      appointment.pendingExpiresAt.getTime() <= Date.now()
+        ? "EXPIRED"
+        : appointment.status,
     notes: appointment.notes,
     createdAt: appointment.createdAt.toISOString(),
     cancelledAt: appointment.cancelledAt?.toISOString() ?? null,

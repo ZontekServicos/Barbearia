@@ -41,6 +41,7 @@ export type { AppointmentStatus } from '@/services/booking'
  */
 export const statusConfig: Record<AppointmentStatus, { label: string; variant: BadgeVariant }> = {
   PENDING: { label: 'Aguardando', variant: 'pending' },
+  AWAITING_PAYMENT: { label: 'Aguardando pagamento', variant: 'pending' },
   CONFIRMED: { label: 'Confirmado', variant: 'confirmed' },
   COMPLETED: { label: 'Concluído', variant: 'completed' },
   CANCELLED: { label: 'Cancelado', variant: 'cancelled' },

@@ -76,3 +76,28 @@ export const publicContactRateLimit = rateLimit({
   windowMs: 15 * 60_000,
   limit: 10,
 })
+
+/**
+ * Webhook de pagamento.
+ *
+ * Folgado de propósito: é o provedor batendo, e ele legitimamente reenvia
+ * quando não recebe 2xx. Estrangular a notificação legítima seria pior que o
+ * abuso que o limite evita — quem não tem a assinatura não passa de
+ * `parseWebhook` de qualquer forma.
+ */
+export const paymentWebhookRateLimit = rateLimit({
+  ...sharedOptions,
+  windowMs: 60_000,
+  limit: 120,
+})
+
+/**
+ * Criação/reabertura da cobrança pelo cliente, com o token da solicitação.
+ *
+ * Apertado: cada chamada pode falar com o provedor de pagamento.
+ */
+export const paymentIntentRateLimit = rateLimit({
+  ...sharedOptions,
+  windowMs: 10 * 60_000,
+  limit: 12,
+})

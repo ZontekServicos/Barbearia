@@ -164,7 +164,7 @@ export const adminAgendaQuerySchema = z
   .object({
     from: shopDateSchema,
     to: shopDateSchema.optional(),
-    status: z.enum(["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED"]).optional(),
+    status: z.enum(["PENDING", "AWAITING_PAYMENT", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED"]).optional(),
   })
   .transform(query => ({ ...query, to: query.to ?? query.from }))
   .refine(range => range.from <= range.to, {
@@ -211,17 +211,52 @@ export const createContactSchema = z.strictObject({
  * trafegam de novo. Duração, preço, fim e status continuam sendo decididos
  * pelo servidor a partir do serviço no banco.
  */
-export const publicBookingRequestSchema = z.strictObject({
-  contactHandle: z
-    .string()
-    .trim()
-    .min(1, "Informe seus dados novamente.")
-    .max(300),
-  serviceId: z.uuid("Serviço inválido."),
-  date: shopDateSchema,
-  startsAt: clockSchema,
-  notes: z.string().trim().max(280).optional(),
-})
+export const publicBookingRequestSchema = z
+  .strictObject({
+    /** Forma atual: o contato já foi validado e gravado na etapa de cadastro. */
+    contactHandle: z
+      .string()
+      .trim()
+      .min(1, "Informe seus dados novamente.")
+      .max(300)
+      .optional(),
+    /**
+     * Forma anterior, aceita por compatibilidade de versão.
+     *
+     * Frontend e backend são implantados SEPARADAMENTE (ver docs/deployment.md:
+     * "O backend não serve os arquivos do frontend"). Quando só o backend sobe,
+     * o navegador continua executando o pacote antigo, que manda nome e
+     * telefone aqui em vez do handle. Rejeitar isso derrubava o fluxo inteiro
+     * com "Dados inválidos." — um campo desconhecido num strictObject.
+     *
+     * O servidor faz o cadastro ele mesmo e segue pelo MESMO caminho: cota,
+     * lock por telefone, reaproveitamento do contato, nome existente
+     * preservado, checagem de bloqueio. Telefone continua identificando sem
+     * autenticar. Remover quando o frontend novo estiver publicado.
+     */
+    fullName: fullNameSchema.optional(),
+    phone: phoneSchema.optional(),
+    serviceId: z.uuid("Serviço inválido."),
+    date: shopDateSchema,
+    startsAt: clockSchema,
+    notes: z.string().trim().max(280).optional(),
+  })
+  /**
+   * Exatamente uma das duas formas, completa e sem mistura.
+   *
+   * Com handle, nome e telefone não podem vir — senão viravam campos ignorados
+   * em silêncio, e a regra aqui é recusar o que não pertence ao pedido. Sem
+   * handle, os dois são obrigatórios: meia identificação não serve.
+   */
+  .refine(
+    body => {
+      const sentContact = body.fullName !== undefined || body.phone !== undefined
+      return body.contactHandle
+        ? !sentContact
+        : body.fullName !== undefined && body.phone !== undefined
+    },
+    { message: "Informe seus dados novamente.", path: ["contactHandle"] },
+  )
 
 /** Token opaco de 256 bits em base64url. */
 export const publicTokenParamSchema = z.object({

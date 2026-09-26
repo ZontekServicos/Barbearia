@@ -16,13 +16,20 @@ import {
   type AdminAppointment,
   type PublicAppointment,
 } from "./booking.mapper.js"
-import { BookingRules, reservedMinutesFor } from "./booking.rules.js"
+import { BookingRules, paymentAmountCents, reservedMinutesFor } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { listBookableStartMinutes } from "./availability.service.js"
 import { fitsInAnyWindow, windowsFromBusinessHours } from "./availability.engine.js"
 import { getDayWindow } from "./schedule.service.js"
 import type { Prisma } from "../../generated/prisma/client.js"
 import { lockUser } from "../../utils/locks.js"
+import { generateUniquePublicReference } from "./public-reference.js"
+import {
+  createPaymentForAppointment,
+  paymentRequestFor,
+  paymentsAvailable,
+} from "../payment/payment.service.js"
+import { requirePaymentProvider } from "../payment/payment.registry.js"
 import { generatePublicToken, digestPublicToken } from "./public-token.js"
 
 /**
@@ -151,15 +158,32 @@ export async function createAppointment(
       // em disputa. Assim a EXCLUDE não recusa a reserva por causa de um
       // pedido abandonado, sem precisar de varredura global no caminho de
       // leitura — que era o que gerava disputa de lock.
-      await tx.appointment.updateMany({
+      // Cobre os dois prazos que seguram um horário: aguardando o barbeiro
+      // (PENDING) e aguardando o pagamento (AWAITING_PAYMENT). Os dois usam
+      // `pendingExpiresAt` como "até quando esta reserva vale", então a mesma
+      // varredura serve para ambos.
+      const expired = await tx.appointment.findMany({
         where: {
-          status: "PENDING",
+          status: { in: ["PENDING", "AWAITING_PAYMENT"] },
           pendingExpiresAt: { lte: now },
           startsAt: { lt: reservedEndsAt },
           reservedEndsAt: { gt: startsAt },
         },
-        data: { status: "EXPIRED", decidedAt: now },
+        select: { id: true },
       })
+      if (expired.length > 0) {
+        const ids = expired.map(entry => entry.id)
+        await tx.appointment.updateMany({
+          where: { id: { in: ids } },
+          data: { status: "EXPIRED", decidedAt: now },
+        })
+        // A cobrança morre com a reserva. Sem isto, um pagamento continuaria
+        // PENDING apontando para um horário que já é de outra pessoa.
+        await tx.payment.updateMany({
+          where: { appointmentId: { in: ids }, status: "PENDING" },
+          data: { status: "EXPIRED" },
+        })
+      }
 
       return tx.appointment.create({
       data: {
@@ -324,33 +348,67 @@ export async function updateAppointmentStatus(
   status: "COMPLETED" | "CANCELLED" | "NO_SHOW",
   now: Date = new Date(),
 ): Promise<AdminAppointment> {
-  const appointment = await prisma.appointment.findUnique({ where: { id: appointmentId } })
+  await prisma.$transaction(async tx => {
+    // Lock da linha ANTES de decidir. A leitura ficava fora da transação, e um
+    // webhook confirmando o pagamento ao mesmo tempo podia ser sobrescrito por
+    // este cancelamento (ou o contrário). Quem pega a linha primeiro decide.
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
+    const appointment = await tx.appointment.findUnique({ where: { id: appointmentId } })
 
-  if (!appointment) {
-    throw AppError.notFound(ErrorCodes.NOT_FOUND, "Agendamento não encontrado.")
-  }
+    if (!appointment) {
+      throw AppError.notFound(ErrorCodes.NOT_FOUND, "Agendamento não encontrado.")
+    }
 
-  if (appointment.status !== "CONFIRMED") {
-    throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento já foi encerrado.")
-  }
+    /**
+     * De onde cada transição pode partir.
+     *
+     * CANCELLED também parte de AWAITING_PAYMENT: com pagamento ligado, aprovar
+     * leva a esse estado, e sem isto a barbearia perdia a capacidade de cancelar
+     * um agendamento aprovado — algo que sempre pôde fazer quando aprovar
+     * resultava direto em CONFIRMED. Ficaria presa até a janela vencer.
+     *
+     * COMPLETED e NO_SHOW continuam exigindo CONFIRMED: não se conclui nem se
+     * registra falta de um atendimento que ainda não foi pago.
+     */
+    const allowedFrom: AppointmentStatus[] =
+      status === "CANCELLED" ? ["CONFIRMED", "AWAITING_PAYMENT"] : ["CONFIRMED"]
+    if (!allowedFrom.includes(appointment.status)) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento já foi encerrado.")
+    }
 
-  await prisma.$transaction([
-    prisma.appointment.update({
+    await tx.appointment.update({
       where: { id: appointmentId },
       data: {
         status,
-        ...(status === "CANCELLED" ? { cancelledAt: now } : {}),
+        ...(status === "CANCELLED"
+          ? {
+              cancelledAt: now,
+              // A reserva deixa de valer: não há mais prazo a cumprir. CANCELLED
+              // está fora da EXCLUDE, então o horário volta a ser oferecido.
+              pendingExpiresAt: null,
+            }
+          : {}),
       },
-    }),
-    prisma.adminAuditLog.create({
+    })
+
+    if (status === "CANCELLED") {
+      // A cobrança morre com a reserva. Deixá-la PENDING manteria uma cobrança
+      // pagável apontando para um horário que já não existe.
+      await tx.payment.updateMany({
+        where: { appointmentId, status: "PENDING" },
+        data: { status: "CANCELED" },
+      })
+    }
+
+    await tx.adminAuditLog.create({
       data: {
         actorId,
         targetUserId: appointment.userId,
         action: `APPOINTMENT_${status}`,
         metadata: { appointmentId, from: appointment.status, to: status },
       },
-    }),
-  ])
+    })
+  })
 
   logger.info("Status de agendamento alterado", { actorId, appointmentId, to: status })
 
@@ -426,6 +484,76 @@ export async function decidePendingRequest(
   decision: "CONFIRMED" | "REJECTED",
   now?: Date,
 ): Promise<AdminAppointment> {
+  const decidedAt = now ?? new Date()
+
+  let prepared:
+    | {
+        reference: string
+        expiresAt: Date
+        created: { providerPaymentId: string; checkoutUrl?: string; pixQrCode?: string }
+      }
+    | undefined
+
+  if (decision === "CONFIRMED") {
+    /**
+     * A referência pública é RESERVADA e gravada em TODA aprovação — com ou sem
+     * pagamento.
+     *
+     * Ligada só ao caminho de pagamento, um agendamento confirmado numa
+     * instalação sem provedor ficava sem referência, e a confirmação pelo
+     * WhatsApp nunca aparecia: o link exige a referência. Como pagamento é
+     * opcional e o padrão é estar desligado, era o caso comum que ficava sem a
+     * funcionalidade.
+     *
+     * Gravar antes de falar com o provedor também resolve outra coisa: sorteada
+     * só na memória, duas aprovações simultâneas geravam referências diferentes
+     * e DUAS cobranças, a do perdedor órfã — sem linha no banco e ainda
+     * pagável. Sob lock da linha, as duas tentativas compartilham a mesma
+     * referência e o provedor deduplica.
+     *
+     * Transação curta e só de reserva: a chamada de rede continua fora dela.
+     */
+    const pending = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
+      const current = await tx.appointment.findUnique({ where: { id: appointmentId } })
+      if (!current) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
+      if (current.status !== "PENDING") {
+        throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
+      }
+      if (current.publicReference) return current
+      const reserved = await generateUniquePublicReference(async candidate =>
+        (await tx.appointment.count({ where: { publicReference: candidate } })) > 0,
+      )
+      return tx.appointment.update({
+        where: { id: appointmentId },
+        data: { publicReference: reserved },
+      })
+    })
+    const reference = pending.publicReference!
+
+    /**
+     * Só cobra quando existe valor a cobrar.
+     *
+     * Um serviço de preço zero é legítimo (cortesia, retoque incluso) — o
+     * catálogo aceita `priceCents: 0`. Abrir cobrança de zero violava o CHECK
+     * `amount_cents > 0` da tabela, a aprovação morria com erro interno e o
+     * pedido ficava preso em PENDING: a barbearia não conseguia aprovar de jeito
+     * nenhum. Sem valor, aprovar confirma direto, como numa instalação sem
+     * pagamento configurado.
+     */
+    const amountCents = paymentAmountCents(pending.servicePriceCents)
+    if (paymentsAvailable() && amountCents > 0) {
+      const expiresAt = new Date(
+        decidedAt.getTime() + BookingRules.paymentWindowMinutes * 60_000,
+      )
+      const provider = requirePaymentProvider()
+      const created = await provider.createPayment(
+        paymentRequestFor({ ...pending, publicReference: reference }, expiresAt),
+      )
+      prepared = { reference, expiresAt, created }
+    }
+  }
+
   await prisma.$transaction(async tx => {
     await lockUser(tx, actorId)
     const actor = await tx.user.findUnique({ where: { id: actorId } })
@@ -433,12 +561,47 @@ export async function decidePendingRequest(
     await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
     const appointment = await tx.appointment.findUnique({where:{id:appointmentId}})
     if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
-    const decidedAt = now ?? new Date()
     if (appointment.status !== "PENDING" || !appointment.pendingExpiresAt || appointment.pendingExpiresAt <= decidedAt) {
       throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
     }
-    await tx.appointment.update({where:{id:appointmentId},data:{status:decision,decidedAt,pendingExpiresAt:null,...(decision === "REJECTED" ? {cancelledAt:decidedAt} : {})}})
-    await tx.adminAuditLog.create({data:{actorId,targetUserId:appointment.userId,action: `APPOINTMENT_REQUEST_${decision}`,metadata:{appointmentId,from:"PENDING",to:decision}}})
+
+    /**
+     * Para onde a aprovação leva.
+     *
+     * Com pagamento configurado, aprovar NÃO confirma: leva a
+     * AWAITING_PAYMENT, e `pendingExpiresAt` passa a marcar o fim da janela de
+     * pagamento. O horário segue reservado — a EXCLUDE cobre AWAITING_PAYMENT —
+     * e vencido o prazo a reserva expira como qualquer pendente abandonada.
+     *
+     * Sem pagamento configurado, aprovar confirma direto: o comportamento
+     * anterior a esta versão, preservado inteiro.
+     *
+     * Cobrar antes da aprovação seria cobrar quem vai ser recusado. Por isso a
+     * ordem é esta e não a inversa.
+     */
+    const target: AppointmentStatus =
+      decision === "REJECTED" ? "REJECTED" : prepared ? "AWAITING_PAYMENT" : "CONFIRMED"
+
+    await tx.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        status: target,
+        decidedAt,
+        pendingExpiresAt: prepared ? prepared.expiresAt : null,
+        ...(decision === "REJECTED" ? { cancelledAt: decidedAt } : {}),
+      },
+    })
+
+    if (prepared) {
+      await createPaymentForAppointment(
+        tx,
+        { ...appointment, publicReference: prepared.reference },
+        prepared.created,
+        prepared.expiresAt,
+      )
+    }
+
+    await tx.adminAuditLog.create({data:{actorId,targetUserId:appointment.userId,action: `APPOINTMENT_REQUEST_${decision}`,metadata:{appointmentId,from:"PENDING",to:target}}})
   })
   logger.info("Solicitação de agendamento decidida", { actorId, appointmentId, to: decision })
   return getAppointmentForAdmin(appointmentId)

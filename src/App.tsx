@@ -16,6 +16,7 @@ import Landing from "./pages/Landing"
 import Login from "./pages/client/Login"
 import Register from "./pages/client/Register"
 import PublicBooking from "./pages/PublicBooking"
+import PublicBookingStatus from "./pages/PublicBookingStatus"
 
 // Client area
 import ClientHome from "./pages/client/ClientHome"
@@ -68,6 +69,16 @@ export default function App() {
             aprovada — quem decide isso é o backend, não esta rota.
           */}
           <Route path="/agendar" element={<PublicBooking />} />
+          {/*
+            Acompanhamento de UMA solicitação: aprovação, pagamento e
+            confirmação. Pública porque a chave é o token do pedido, não uma
+            sessão — telefone não abre nada aqui.
+
+            Com e sem parâmetro: o link que a pessoa recebe traz o token, e
+            quem volta do mesmo navegador cai no comprovante guardado.
+          */}
+          <Route path="/agendamento" element={<PublicBookingStatus />} />
+          <Route path="/agendamento/:token" element={<PublicBookingStatus />} />
 
           {/* Estados de conta — exigem sessão, mas não conta aprovada */}
           <Route

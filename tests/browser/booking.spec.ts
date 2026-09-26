@@ -455,3 +455,272 @@ test('back navigation changes contact, service, date and time without stale subm
   await expect(page.getByText('Cabelo + Barba + Pigmentação', { exact: true })).toBeVisible()
   await expect(page.getByText('50 minutos', { exact: true })).toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// Acompanhamento do pedido: aprovação, pagamento e confirmação
+// ---------------------------------------------------------------------------
+
+const TOKEN = 'A'.repeat(43)
+
+const statusAppointment = (status: string) => ({
+  id: '33333333-3333-4333-8333-333333333333',
+  ...slot('18:20', 30),
+  date: '2026-09-29',
+  startsAt: '2026-09-29T18:20:00-03:00',
+  serviceId: service30.id,
+  serviceName: 'Corte',
+  servicePriceCents: 3500,
+  servicePriceFormatted: '35,00',
+  durationMinutes: 30,
+  status,
+  notes: null,
+  createdAt: '2026-09-24T00:00:00Z',
+  cancelledAt: null,
+})
+
+const payment = (status: string, expiresInSeconds = 840) => ({
+  status,
+  amountCents: 3500,
+  amountFormatted: '35,00',
+  currency: 'BRL',
+  mode: 'FULL',
+  expiresInSeconds,
+  expiresAt: '2026-09-24T15:15:00Z',
+  checkoutUrl: 'https://pagamento.invalido/manual/abc',
+  pixQrCode: '00020126MANUALabc123',
+})
+
+/** Serve uma resposta de /booking/requests/:token e semeia o comprovante. */
+async function openStatus(page: Page, data: Record<string, unknown>) {
+  await page.route('**/api/booking/requests/**', route => ok(route, data))
+  await page.addInitScript(token => {
+    localStorage.setItem('ec.booking.lastRequest', token as string)
+  }, TOKEN)
+  await open(page, 'status')
+}
+
+test('acompanhamento PENDING: aguarda o barbeiro, sem cobranca e sem WhatsApp', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: null,
+    payment: null,
+    whatsappUrl: null,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Aguardando confirmação' })).toBeVisible()
+  // Nunca "confirmado" antes de a barbearia decidir.
+  await expect(page.getByRole('heading', { name: /confirmado!/ })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+  await expect(page.getByText('Pix copia e cola')).toHaveCount(0)
+  await expect(page.getByText('Corte', { exact: true })).toBeVisible()
+})
+
+test('acompanhamento AWAITING_PAYMENT: valor, prazo, Pix e nenhum "ja paguei"', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('AWAITING_PAYMENT'),
+    reference: 'EC-7F3K2Q',
+    payment: payment('PENDING'),
+    whatsappUrl: null,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Pedido aprovado!' })).toBeVisible()
+  await expect(page.getByText('R$ 35,00').first()).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Aguardando pagamento' })).toBeVisible()
+  await expect(page.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
+  await expect(page.getByText('14:00')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Pagar agora' })).toHaveAttribute(
+    'href',
+    'https://pagamento.invalido/manual/abc',
+  )
+  await expect(page.getByText('00020126MANUALabc123')).toBeVisible()
+
+  // Nada que afirme pagamento por conta própria, e nada de WhatsApp ainda.
+  await expect(page.getByRole('button', { name: /j. paguei/i })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+  await expect(page.getByText(/confirmação é automática/i)).toBeVisible()
+})
+
+test('acompanhamento CONFIRMED: pagamento confirmado e WhatsApp da barbearia', async ({ page }) => {
+  await setup(page)
+  const whatsappUrl =
+    'https://wa.me/5571999990000?text=' +
+    encodeURIComponent(
+      'Meu agendamento na ErickCorttes foi confirmado\n\nServico: Corte\nReferencia: EC-7F3K2Q\n\nObrigado!',
+    )
+  await openStatus(page, {
+    appointment: statusAppointment('CONFIRMED'),
+    reference: 'EC-7F3K2Q',
+    payment: { ...payment('PAID'), expiresInSeconds: 0 },
+    whatsappUrl,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  // Duas menções legítimas: o subtítulo e o selo com o valor. Ancoramos no selo.
+  await expect(page.getByText(/Pagamento confirmado — R\$ 35,00/)).toBeVisible()
+
+  const link = page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })
+  await expect(link).toHaveAttribute('href', whatsappUrl)
+  // Abre em aba nova e sem vazar o referrer.
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', /noopener/)
+
+  // O token NAO viaja na mensagem.
+  const href = (await link.getAttribute('href'))!
+  expect(decodeURIComponent(href)).not.toContain(TOKEN)
+
+  // A reserva não depende de o WhatsApp abrir.
+  await expect(page.getByText(/está tudo certo do mesmo jeito/i)).toBeVisible()
+})
+
+test('acompanhamento: pagamento recusado nao confirma e oferece nova tentativa', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('AWAITING_PAYMENT'),
+    reference: 'EC-7F3K2Q',
+    payment: payment('FAILED', 600),
+    whatsappUrl: null,
+  })
+
+  await expect(page.getByRole('status').filter({ hasText: 'Pagamento recusado' })).toBeVisible()
+  await expect(page.getByText(/ainda pode tentar de novo/i)).toBeVisible()
+  await expect(page.getByRole('heading', { name: /confirmado!/ })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+})
+
+test('acompanhamento EXPIRED: horario liberado, sem cobranca viva e sem WhatsApp', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('EXPIRED'),
+    reference: 'EC-7F3K2Q',
+    payment: { ...payment('EXPIRED'), expiresInSeconds: 0 },
+    whatsappUrl: null,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Solicitação expirada' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Fazer outro agendamento' })).toBeVisible()
+})
+
+test('acompanhamento: token desconhecido nao revela nada e limpa o comprovante', async ({ page }) => {
+  await setup(page)
+  await page.route('**/api/booking/requests/**', route =>
+    route.fulfill({
+      status: 404,
+      json: { success: false, error: { code: 'NOT_FOUND', message: 'Solicitação não encontrada.' } },
+    }),
+  )
+  await page.addInitScript(token => {
+    localStorage.setItem('ec.booking.lastRequest', token as string)
+  }, TOKEN)
+  await open(page, 'status')
+
+  await expect(page.getByRole('heading', { name: /Não encontramos essa solicitação/ })).toBeVisible()
+  // Comprovante inválido sai do navegador.
+  expect(await page.evaluate(() => localStorage.getItem('ec.booking.lastRequest'))).toBeNull()
+})
+
+for (const width of [360, 375, 390, 412, 430]) {
+  test('acompanhamento mobile ' + width + ': pagamento e confirmacao cabem; alvos >=44px', async ({ page }) => {
+    await setup(page)
+    await page.setViewportSize({ width, height: 900 })
+    await openStatus(page, {
+      appointment: statusAppointment('AWAITING_PAYMENT'),
+      reference: 'EC-7F3K2Q',
+      payment: payment('PENDING'),
+      whatsappUrl: null,
+    })
+    await expect(page.getByRole('heading', { name: 'Pedido aprovado!' })).toBeVisible()
+    await noOverflow(page)
+    await touchTargets(page)
+  })
+
+  test('confirmacao mobile ' + width + ': botao do WhatsApp cabe e tem alvo >=44px', async ({ page }) => {
+    await setup(page)
+    await page.setViewportSize({ width, height: 900 })
+    await openStatus(page, {
+      appointment: statusAppointment('CONFIRMED'),
+      reference: 'EC-7F3K2Q',
+      payment: { ...payment('PAID'), expiresInSeconds: 0 },
+      whatsappUrl: 'https://wa.me/5571999990000?text=ok',
+    })
+    await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toBeVisible()
+    await noOverflow(page)
+    await touchTargets(page)
+  })
+}
+
+// §30 — retorno posterior pelo link, sem autenticacao e sem comprovante local.
+test('acompanhamento por link: token vem da URL, sem sessao e sem localStorage', async ({ page }) => {
+  await setup(page)
+  const urlToken = 'B'.repeat(43)
+  let requested = ''
+  let sentAuth: string | undefined
+  await page.route('**/api/booking/requests/**', route => {
+    requested = route.request().url()
+    sentAuth = route.request().headers()['authorization']
+    return ok(route, {
+      appointment: statusAppointment('CONFIRMED'),
+      reference: 'EC-7F3K2Q',
+      payment: null,
+      whatsappUrl: 'https://wa.me/5571999990000?text=ok',
+    })
+  })
+  // Nada guardado no navegador: so o link.
+  await page.goto('/tests/browser/fixture.html?page=status-route&token=' + urlToken)
+
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  expect(requested).toContain(urlToken)
+  expect(await page.evaluate(() => localStorage.getItem('ec.booking.lastRequest'))).toBeNull()
+  // A consulta do pedido nao leva credencial: o token do pedido e a unica chave.
+  // (O AuthProvider da aplicacao tenta restaurar sessao em qualquer pagina; isso
+  //  e comportamento global, nao um requisito desta tela.)
+  expect(sentAuth).toBeUndefined()
+  await expect(page.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
+})
+
+// §30 — o token da URL tem prioridade sobre o comprovante guardado.
+test('token da URL prevalece sobre o comprovante em localStorage', async ({ page }) => {
+  await setup(page)
+  const urlToken = 'C'.repeat(43)
+  const stored = 'D'.repeat(43)
+  const asked: string[] = []
+  await page.route('**/api/booking/requests/**', route => {
+    asked.push(route.request().url())
+    return ok(route, {
+      appointment: statusAppointment('PENDING'), reference: null, payment: null, whatsappUrl: null,
+    })
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), stored)
+  await page.goto('/tests/browser/fixture.html?page=status-route&token=' + urlToken)
+
+  await expect(page.getByRole('heading', { name: 'Aguardando confirmação' })).toBeVisible()
+  expect(asked.some(u => u.includes(urlToken))).toBe(true)
+  expect(asked.some(u => u.includes(stored))).toBe(false)
+})
+
+// §29 — estados reais restantes, com texto coerente e sem dado interno.
+for (const [status, heading] of [
+  ['REJECTED', 'Pedido não aceito'],
+  ['CANCELLED', 'Agendamento cancelado'],
+  ['COMPLETED', 'Atendimento concluído'],
+] as const) {
+  test('acompanhamento ' + status + ': texto coerente, sem WhatsApp e sem dado interno', async ({ page }) => {
+    await setup(page)
+    await openStatus(page, {
+      appointment: statusAppointment(status),
+      reference: status === 'COMPLETED' ? 'EC-7F3K2Q' : null,
+      payment: null,
+      whatsappUrl: null,
+    })
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+    // Nenhum identificador interno na tela.
+    const text = await page.locator('main').innerText()
+    expect(text).not.toContain('33333333-3333-4333-8333-333333333333')
+    expect(text).not.toContain(service30.id)
+    expect(text).not.toMatch(/AWAITING_PAYMENT|PENDING|CONFIRMED|REJECTED/)
+  })
+}

@@ -79,7 +79,51 @@ export const BookingRules = {
   maximumAdvanceDays: 60,
   /** Prazo para o cliente cancelar sozinho. Depois disso, só a barbearia. */
   customerCancellationCutoffMinutes: 120,
+
+  /**
+   * Janela para pagar, contada da APROVAÇÃO do barbeiro.
+   *
+   * Durante ela o horário continua reservado — a EXCLUDE cobre
+   * AWAITING_PAYMENT. Vencida sem pagamento, a solicitação expira e o horário
+   * volta a ser oferecido, exatamente como uma pendente abandonada.
+   *
+   * Mora aqui, com as outras regras de agenda, em vez de num número solto no
+   * meio do serviço de pagamento.
+   */
+  paymentWindowMinutes: 15,
+
+  /**
+   * Quanto cobrar para confirmar.
+   *
+   *   FULL    → o valor inteiro do serviço.
+   *   DEPOSIT → um sinal (ver depositPercent / depositMinimumCents).
+   *
+   * Sem definição comercial ainda, o padrão é FULL — cobrar o preço do
+   * catálogo é o comportamento que ninguém precisa explicar. A arquitetura
+   * suporta os dois; trocar é mudar esta linha.
+   */
+  paymentMode: "FULL" as "FULL" | "DEPOSIT",
+
+  /** Percentual do sinal quando paymentMode = DEPOSIT. */
+  depositPercent: 50,
+  /** Piso do sinal, para não gerar cobrança de centavos. */
+  depositMinimumCents: 1000,
 } as const
+
+/**
+ * Quanto cobrar por um atendimento, em centavos.
+ *
+ * SEMPRE derivado do preço congelado na reserva, que por sua vez veio de
+ * `Service.priceCents` no banco. Valor enviado pelo navegador nunca entra
+ * nesta conta — não há parâmetro por onde entrar.
+ */
+export function paymentAmountCents(servicePriceCents: number): number {
+  if (BookingRules.paymentMode === "FULL") return servicePriceCents
+  const share = Math.round((servicePriceCents * BookingRules.depositPercent) / 100)
+  // O sinal nunca passa do preço: um piso alto num serviço barato viraria
+  // cobrança maior que o serviço.
+  return Math.min(servicePriceCents, Math.max(share, BookingRules.depositMinimumCents))
+}
 
 /**
  * Quanto tempo de agenda um atendimento realmente consome.

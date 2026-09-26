@@ -4,10 +4,12 @@ import { apiRequest } from "./api"
  * Estados de um agendamento.
  *
  * PENDING é a solicitação pública aguardando o barbeiro — ela já segura o
- * horário. REJECTED e EXPIRED o liberam.
+ * horário. AWAITING_PAYMENT é a aprovada esperando o pagamento; também segura,
+ * pelo prazo da janela. REJECTED e EXPIRED liberam.
  */
 export type AppointmentStatus =
   | "PENDING"
+  | "AWAITING_PAYMENT"
   | "CONFIRMED"
   | "COMPLETED"
   | "CANCELLED"
@@ -128,6 +130,7 @@ export async function cancelMyAppointment(id: string): Promise<Appointment> {
 /** Rótulos de status — fonte única para cliente e admin. */
 export const STATUS_LABEL: Record<AppointmentStatus, string> = {
   PENDING: "Aguardando confirmação",
+  AWAITING_PAYMENT: "Aguardando pagamento",
   CONFIRMED: "Confirmado",
   COMPLETED: "Concluído",
   CANCELLED: "Cancelado",
@@ -138,6 +141,7 @@ export const STATUS_LABEL: Record<AppointmentStatus, string> = {
 
 export const STATUS_BADGE: Record<AppointmentStatus, "confirmed" | "completed" | "cancelled" | "missed" | "pending"> = {
   PENDING: "pending",
+  AWAITING_PAYMENT: "pending",
   CONFIRMED: "confirmed",
   COMPLETED: "completed",
   CANCELLED: "cancelled",

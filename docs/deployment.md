@@ -20,8 +20,12 @@ O bootstrap e o seed **não** são executados no build, start ou pré-deploy. N�
 
 - `20260922100000_booking_domain`: serviços, expediente, bloqueios e agendamentos com FKs, CHECKs e constraint de exclusão para impedir reservas confirmadas sobrepostas.
 - `20260922160000_password_auth`: credenciais Argon2id e contadores por usuário; remove toda a tabela `otp_challenges` e revoga sessões antigas.
+- `20260926120000_appointment_awaiting_payment`: acrescenta o valor `AWAITING_PAYMENT` ao enum `AppointmentStatus`. Sozinha numa migration porque o PostgreSQL não permite USAR um valor de enum na mesma transação que o adiciona. Irreversível — não existe `DROP VALUE`.
+- `20260926120100_payments`: coluna `public_reference`, tabelas `payments` e `payment_webhook_events`, e reconstrução da `appointments_no_overlap` para cobrir `AWAITING_PAYMENT`. A reconstrução da EXCLUDE adquire lock na tabela de agendamentos; ver a nota sobre locks mais abaixo.
 
 As duas migrations anteriores da fundação são mantidas. `migrate deploy` aplica apenas migrations pendentes do histórico. O schema e as migrations devem acompanhar o backend no mesmo commit. Não editar SQL de migrations já aplicadas.
+
+As migrations de pagamento são **estritamente aditivas**: nenhuma linha existente muda de estado, nenhum agendamento é deslocado, nenhuma coluna é removida. Sem `PAYMENT_PROVIDER` configurado o pagamento fica desligado e aprovar uma solicitação a confirma direto, como antes — subir o código sem configurar pagamento não altera comportamento nenhum. Ver [docs/payments.md](./payments.md).
 
 A migration de senha mantém usuários, IDs, telefone único, auditoria e relações. Contas antigas recebem hash nulo, sem senha padrão: não podem entrar nem ser tomadas por recadastro. Administradores existentes precisam estabelecer senha pelo bootstrap controlado; clientes existentes dependem de redefinição assistida após confirmação presencial de identidade. O DROP inclui desafios OTP ainda válidos, apesar do comentário histórico sobre códigos expirados. Não tratar o corte como apenas aditivo para a autenticação.
 
@@ -39,6 +43,9 @@ A migration de senha mantém usuários, IDs, telefone único, auditoria e relaç
 | `REFRESH_COOKIE_SAME_SITE` | `lax` por padrão; `none` apenas para sites diferentes sobre HTTPS |
 | `ACCESS_TOKEN_TTL_MINUTES` | 15 por padrão, máximo 60 |
 | `REFRESH_TOKEN_TTL_DAYS` | 30 por padrão |
+| `PAYMENT_PROVIDER` | Opcional. Vazio = pagamento desligado. `manual` é adaptador de teste e é **recusado em produção** |
+| `PAYMENT_WEBHOOK_SECRET` | Obrigatório sempre que `PAYMENT_PROVIDER` estiver preenchido; mínimo 32 caracteres |
+| `BARBERSHOP_WHATSAPP_NUMBER` | Opcional, E.164. Destino do botão de confirmação. Vazio = botão não é oferecido |
 
 **`JWT_REFRESH_SECRET` não é consumido nem exigido.** O refresh é um valor opaco aleatório, armazenado no PostgreSQL somente como SHA-256. Não criar outro segredo sem uso para satisfazer um exemplo genérico de configuração.
 
@@ -46,7 +53,37 @@ Variáveis sem uso no runtime novo, removíveis após confirmar sucesso da impla
 
 A variável exata do frontend é **`VITE_API_URL`**, lida em `src/services/api.ts`. É pública e incorporada durante o build. Seu padrão de produção é `/api`; esse padrão só funciona quando existe proxy para a API no mesmo domínio. Para frontend/API separados, o operador deve configurar a URL HTTPS pública correta da API no build do frontend e alinhar `FRONTEND_URL`, CORS e cookies no backend. Nunca usar a URL privada do PostgreSQL nem segredos em `VITE_*`.
 
+### Descompasso de versão entre frontend e backend
+
+Como os dois serviços sobem **separadamente**, publicar um sem o outro deixa o
+navegador executando um pacote de uma versão e a API de outra. Foi exatamente o
+que produziu o erro **"Dados inválidos."** no envio final do agendamento: o
+backend novo passou a exigir `contactHandle` em `POST /booking/requests`,
+enquanto o pacote anterior ainda mandava `fullName` + `phone`.
+
+Duas medidas:
+
+- `POST /booking/requests` aceita **as duas formas** de identificação, então um
+  navegador uma versão atrás continua funcionando em vez de quebrar. É rede de
+  segurança, não substituto de publicar o frontend. A forma anterior pode ser
+  removida depois de confirmar que o pacote novo está no ar.
+- **Ordem obrigatória: BACKEND primeiro, FRONTEND depois.** Verificado nas duas
+  direções:
+
+  | Combinação | Resultado |
+  | --- | --- |
+  | frontend antigo + backend novo | **funciona** — o backend aceita a forma anterior |
+  | frontend novo + backend antigo | **quebra** — o backend anterior não expõe `POST /booking/contacts`, e a primeira etapa do agendamento falha com 404 |
+
+  Só uma das direções é compatível, então a ordem não é preferência. Publicar o
+  frontend primeiro troca o erro do incidente por outro, na etapa de cadastro.
+
 O backend não serve os arquivos do frontend. Configurar/verificar separadamente hospedagem SPA, fallback das rotas do React e build do frontend. Publicação no GitHub não comprova que esse serviço frontend foi implantado.
+
+**Fallback de SPA é requisito, não detalhe.** O acompanhamento do pedido vive em
+`/agendamento/<token>` — um link que o cliente abre dias depois, direto, sem
+passar pela raiz. Sem o fallback para `index.html`, essa URL responde 404 na
+hospedagem e a pessoa não consegue ver nem pagar o próprio agendamento.
 
 ## Primeiro administrador após a migration
 

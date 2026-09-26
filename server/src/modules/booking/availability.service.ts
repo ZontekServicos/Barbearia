@@ -63,9 +63,11 @@ export interface AvailabilityResult {
  *
  * PENDING entra porque uma solicitação aguardando o barbeiro já segura o
  * horário — oferecê-lo a outra pessoa criaria duas promessas para a mesma
- * vaga. CANCELLED, NO_SHOW, REJECTED e EXPIRED liberam.
+ * vaga. AWAITING_PAYMENT entra pelo mesmo motivo: o barbeiro já aprovou e o
+ * cliente está pagando; liberar o horário no meio disso venderia duas vezes.
+ * CANCELLED, NO_SHOW, REJECTED e EXPIRED liberam.
  */
-export const BLOCKING_STATUSES = ["PENDING", "CONFIRMED"] as const
+export const BLOCKING_STATUSES = ["PENDING", "AWAITING_PAYMENT", "CONFIRMED"] as const
 
 /**
  * Filtro de ocupação: o que realmente segura um horário AGORA.
@@ -84,7 +86,12 @@ function blockingAppointmentFilter(now: Date) {
   return {
     OR: [
       { status: "CONFIRMED" as const },
+      // Os dois estados com prazo usam `pendingExpiresAt` como "até quando esta
+      // reserva segura o horário": aguardando o barbeiro e aguardando o
+      // pagamento. Vencido o prazo, o horário volta a ser oferecido — sem
+      // escrever nada no caminho de leitura, que era a origem do deadlock.
       { status: "PENDING" as const, pendingExpiresAt: { gt: now } },
+      { status: "AWAITING_PAYMENT" as const, pendingExpiresAt: { gt: now } },
     ],
   }
 }

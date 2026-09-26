@@ -49,6 +49,8 @@ describe('migration inicial', () => {
       'admin_audit_logs',
       'appointments',
       'business_hours',
+      'payment_webhook_events',
+      'payments',
       'public_booking_quotas',
       'public_contact_handles',
       'refresh_tokens',

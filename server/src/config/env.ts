@@ -63,6 +63,38 @@ const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+
+    /**
+     * Provedor de pagamento ativo. Ausente = pagamento desligado, e aprovar
+     * uma solicitação confirma direto, como antes desta versão.
+     *
+     * "manual" é adaptador de teste e é RECUSADO em produção (ver superRefine):
+     * confirmar dinheiro que não entrou não pode ser possível por descuido de
+     * configuração.
+     */
+    PAYMENT_PROVIDER: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.enum(["manual"]).optional(),
+    ),
+    /** Segredo que autentica a notificação do provedor. Exigido com provedor. */
+    PAYMENT_WEBHOOK_SECRET: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().min(32, "PAYMENT_WEBHOOK_SECRET precisa de ao menos 32 caracteres").optional(),
+    ),
+
+    /**
+     * WhatsApp oficial da barbearia, em E.164 — o destino do botão de
+     * confirmação. Uma configuração só, em vez do número repetido em
+     * componentes. Ausente = botão não é oferecido.
+     */
+    BARBERSHOP_WHATSAPP_NUMBER: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z
+        .string()
+        .trim()
+        .regex(/^\+[1-9]\d{7,14}$/, "Use o formato internacional, ex.: +5571999999999")
+        .optional(),
+    ),
   })
   .superRefine((env, ctx) => {
     const origins = env.FRONTEND_URL.split(",").map((o) => o.trim())
@@ -111,6 +143,26 @@ const envSchema = z
         }
       }
 
+    // Adaptador de teste jamais em produção: ele confirma pagamento sem
+    // provedor real, e um deploy configurado por engano confirmaria reservas
+    // sem dinheiro nenhum ter entrado.
+    if (env.NODE_ENV === "production" && env.PAYMENT_PROVIDER === "manual") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PAYMENT_PROVIDER"],
+        message:
+          "O provedor 'manual' é de teste e não pode ser usado em produção. Configure um provedor real.",
+      })
+    }
+    // Sem segredo não há como distinguir a notificação do provedor de um POST
+    // qualquer na internet — e o webhook é o que confirma o pagamento.
+    if (env.PAYMENT_PROVIDER && !env.PAYMENT_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PAYMENT_WEBHOOK_SECRET"],
+        message: "Configurar PAYMENT_PROVIDER exige PAYMENT_WEBHOOK_SECRET.",
+      })
+    }
   })
 
 export type Env = z.infer<typeof envSchema>
@@ -138,3 +190,13 @@ export const isProduction = env.NODE_ENV === "production"
 export const allowedOrigins: string[] = env.FRONTEND_URL.split(",")
   .map((origin) => origin.trim())
   .filter(Boolean)
+
+/**
+ * Pagamento ligado?
+ *
+ * Derivado da configuração, não de uma flag solta: sem provedor não há como
+ * receber dinheiro, então não faz sentido pedir pagamento. Nessa situação a
+ * aprovação do barbeiro confirma a reserva direto — o comportamento anterior
+ * a esta versão, preservado.
+ */
+export const paymentsEnabled = Boolean(env.PAYMENT_PROVIDER)

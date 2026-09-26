@@ -116,3 +116,82 @@ it("recusa banco não PostgreSQL, cookie path amplo e trust proxy arbitrário", 
   ])
     await assert.rejects(loadEnvWith({ NODE_ENV: "development", ...values }))
 })
+
+describe("configuração de pagamento", () => {
+  const strongSecret = "webhook_secret_com_mais_de_32_caracteres_ok"
+
+  it("sem provedor, pagamento fica desligado e nada é exigido", async () => {
+    const mod = await loadEnvWith({ NODE_ENV: "development" })
+    assert.equal(mod.env.PAYMENT_PROVIDER, undefined)
+    assert.equal(mod.paymentsEnabled, false)
+  })
+
+  it("provedor 'manual' é recusado em PRODUÇÃO", async () => {
+    // O adaptador de teste confirma pagamento sem provedor real. Se um deploy
+    // de produção o aceitasse por descuido de configuração, reservas seriam
+    // confirmadas sem dinheiro nenhum ter entrado.
+    await assert.rejects(
+      () =>
+        loadEnvWith({
+          NODE_ENV: "production",
+          FRONTEND_URL: "https://barbearia.exemplo",
+          // Valor de teste apenas: variado o bastante para passar a checagem de
+          // força que produção aplica, e nunca usado em lugar nenhum.
+          JWT_ACCESS_SECRET: "fixture-q7W2xZ9pL4vB8nR3wT6yU1jH5gF0dS",
+          PAYMENT_PROVIDER: "manual",
+          PAYMENT_WEBHOOK_SECRET: strongSecret,
+        }),
+      /manual.*produção|produção.*manual/is,
+    )
+  })
+
+  it("provedor sem segredo de webhook é recusado", async () => {
+    // Sem segredo não há como distinguir a notificação do provedor de um POST
+    // qualquer da internet — e é o webhook que confirma o pagamento.
+    await assert.rejects(
+      () =>
+        loadEnvWith({
+          NODE_ENV: "development",
+          PAYMENT_PROVIDER: "manual",
+          PAYMENT_WEBHOOK_SECRET: undefined,
+        }),
+      /PAYMENT_WEBHOOK_SECRET/,
+    )
+  })
+
+  it("segredo de webhook curto é recusado", async () => {
+    await assert.rejects(
+      () =>
+        loadEnvWith({
+          NODE_ENV: "development",
+          PAYMENT_PROVIDER: "manual",
+          PAYMENT_WEBHOOK_SECRET: "curto",
+        }),
+      /PAYMENT_WEBHOOK_SECRET/,
+    )
+  })
+
+  it("com provedor e segredo, pagamento fica ligado", async () => {
+    const mod = await loadEnvWith({
+      NODE_ENV: "development",
+      PAYMENT_PROVIDER: "manual",
+      PAYMENT_WEBHOOK_SECRET: strongSecret,
+    })
+    assert.equal(mod.paymentsEnabled, true)
+  })
+
+  it("número do WhatsApp precisa ser internacional", async () => {
+    for (const invalid of ["71999999999", "(71) 99999-9999", "+0719999", "whatsapp"]) {
+      await assert.rejects(
+        () => loadEnvWith({ NODE_ENV: "development", BARBERSHOP_WHATSAPP_NUMBER: invalid }),
+        /BARBERSHOP_WHATSAPP_NUMBER/,
+        invalid,
+      )
+    }
+    const mod = await loadEnvWith({
+      NODE_ENV: "development",
+      BARBERSHOP_WHATSAPP_NUMBER: "+5571999990000",
+    })
+    assert.equal(mod.env.BARBERSHOP_WHATSAPP_NUMBER, "+5571999990000")
+  })
+})
