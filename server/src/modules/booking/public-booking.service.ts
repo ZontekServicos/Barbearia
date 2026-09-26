@@ -11,7 +11,8 @@ import { CONTACT_HANDLE_TTL_MS, invalidContactHandle, issueContactHandle, readCo
 import { takeContactRegistrationQuota } from "./public-quota.js"
 import { maskPhoneForDisplay } from "../../utils/phone.js"
 import { toPublicPayment, type PublicPayment } from "../payment/payment.service.js"
-import { buildWhatsappLink } from "./whatsapp.js"
+import { buildPaymentHelpLink, buildWhatsappLink } from "./whatsapp.js"
+import { buildPixPresentation, type PixPresentation } from "../payment/pix/pix.service.js"
 
 /**
  * Quantas reservas futuras vivas um mesmo telefone pode acumular.
@@ -67,6 +68,18 @@ export interface PublicRequestView {
   payment: PublicPayment | null
   /** Link de confirmação pelo WhatsApp. `null` até estar CONFIRMED. */
   whatsappUrl: string | null
+  /**
+   * Dados do Pix — só enquanto o pagamento está em aberto.
+   *
+   * Some quando confirmado, recusado ou expirado: um QR que já não deve ser
+   * pago não pode continuar na tela convidando a pagar de novo.
+   */
+  pix: PixPresentation | null
+  /**
+   * Link para falar com a barbearia durante o pagamento. Diferente do de
+   * confirmação: este não afirma que o agendamento está confirmado.
+   */
+  paymentHelpUrl: string | null
 }
 
 export interface BookingRequestResult {
@@ -285,6 +298,25 @@ export async function getPublicRequest(
   const view = toPublicAppointment(lapsed ? { ...appointment, status: "EXPIRED" } : appointment)
   const paid = appointment.payment?.status === "PAID"
 
+  const whatsappData = appointment.publicReference
+    ? {
+        serviceName: view.serviceName,
+        date: view.date,
+        startsAtClock: view.startsAtClock,
+        reference: appointment.publicReference,
+        ...(appointment.user.fullName
+          ? { firstName: appointment.user.fullName.split(" ")[0]! }
+          : {}),
+      }
+    : null
+
+  /**
+   * O Pix aparece só com a cobrança em aberto e o horário ainda aguardando
+   * pagamento. Confirmado, recusado, expirado ou cancelado: nada de QR.
+   */
+  const awaitingPayment =
+    view.status === "AWAITING_PAYMENT" && appointment.payment?.status === "PENDING" && !lapsed
+
   return {
     appointment: view,
     reference: appointment.publicReference,
@@ -302,20 +334,19 @@ export async function getPublicRequest(
      * anunciar como confirmado algo que não está.
      */
     whatsappUrl:
-      view.status === "CONFIRMED" && appointment.publicReference
+      view.status === "CONFIRMED" && whatsappData
         ? buildWhatsappLink({
-            serviceName: view.serviceName,
-            date: view.date,
-            startsAtClock: view.startsAtClock,
-            reference: appointment.publicReference,
+            ...whatsappData,
             ...(paid && appointment.payment
               ? { amountFormatted: toPublicPayment(appointment.payment, now).amountFormatted }
               : {}),
-            ...(appointment.user.fullName
-              ? { firstName: appointment.user.fullName.split(" ")[0]! }
-              : {}),
           })
         : null,
+    pix:
+      awaitingPayment && appointment.payment
+        ? await buildPixPresentation(appointment.payment, appointment.publicReference)
+        : null,
+    paymentHelpUrl: awaitingPayment && whatsappData ? buildPaymentHelpLink(whatsappData) : null,
   }
 }
 

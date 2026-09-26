@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { env, isProduction } from "../../../config/env.js"
 import { AppError, ErrorCodes } from "../../../utils/errors.js"
+import { buildBrCode } from "../pix/brcode.js"
 import type {
   CreatePaymentInput,
   CreatedPayment,
@@ -76,11 +77,30 @@ export function createManualProvider(): PaymentProvider {
         .update(`payment:${input.reference}`)
         .digest("hex")
         .slice(0, 32)}`
+      /**
+       * "Copia e Cola" que é um BR Code DE VERDADE.
+       *
+       * Antes era uma cadeia inventada, e isso escondia um caminho inteiro: a
+       * apresentação do Pix dinâmico nunca era exercitada, porque o payload
+       * falhava na validação. Um provedor real devolve BR Code válido, então o
+       * adaptador de teste também devolve — assim o que os testes percorrem é o
+       * caminho que roda em produção.
+       *
+       * A chave é de teste e o recebedor é fictício: nada aqui recebe dinheiro.
+       */
       return {
         providerPaymentId,
         // Endereço fictício de checkout. Não há tela de provedor nenhuma.
         checkoutUrl: `https://pagamento.invalido/manual/${providerPaymentId}`,
-        pixQrCode: `00020126MANUAL${providerPaymentId}`,
+        pixQrCode: buildBrCode({
+          pixKey: "manual-test@pagamento.invalido",
+          receiverName: "Provedor de Teste",
+          receiverCity: "Salvador",
+          amountCents: input.amountCents,
+          reference: input.reference,
+          // Cobrança de uso único, como a de um provedor real.
+          singleUse: true,
+        }),
       }
     },
 

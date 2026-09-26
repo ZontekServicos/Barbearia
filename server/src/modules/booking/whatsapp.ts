@@ -69,3 +69,38 @@ export function buildWhatsappLink(data: WhatsappConfirmation): string | null {
   const digits = number.replace(/[^0-9]/g, "")
   return `https://wa.me/${digits}?text=${encodeURIComponent(buildConfirmationMessage(data))}`
 }
+
+/**
+ * Mensagem da etapa de PAGAMENTO — "Falar com a barbearia".
+ *
+ * Serve para quem está pagando e precisa falar com alguém: comprovante que não
+ * chegou, dúvida na chave, Pix que caiu com outro valor. Nunca diz "confirmado",
+ * porque nesse momento não está — diz que o pedido foi APROVADO e que o
+ * pagamento está em andamento.
+ *
+ * Mesmas exclusões da mensagem de confirmação: nenhum token, handle, id interno
+ * ou segredo. A referência pública é o que identifica o pedido.
+ */
+export function buildPaymentHelpMessage(data: WhatsappConfirmation): string {
+  const [year, month, day] = data.date.split("-")
+  const lines = [
+    "Olá! Meu agendamento na ErickCorttes foi aprovado.",
+    "",
+    ...(data.firstName ? [`Nome: ${data.firstName}`] : []),
+    `Serviço: ${data.serviceName}`,
+    `Data: ${day}/${month}/${year}`,
+    `Horário: ${data.startsAtClock}`,
+    `Referência: ${data.reference}`,
+    "",
+    "Estou realizando o pagamento via Pix.",
+  ]
+  return lines.join("\n")
+}
+
+/** Link do WhatsApp para a etapa de pagamento. `null` sem número configurado. */
+export function buildPaymentHelpLink(data: WhatsappConfirmation): string | null {
+  const number = env.BARBERSHOP_WHATSAPP_NUMBER
+  if (!number) return null
+  const digits = number.replace(/[^0-9]/g, "")
+  return `https://wa.me/${digits}?text=${encodeURIComponent(buildPaymentHelpMessage(data))}`
+}

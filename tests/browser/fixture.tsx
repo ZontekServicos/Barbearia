@@ -6,6 +6,7 @@ import Services from '../../src/pages/admin/Services'
 import ClientLayout from '../../src/components/layouts/ClientLayout'
 import Schedule from '../../src/pages/client/Schedule'
 import BookingStatus from '../../src/pages/client/BookingStatus'
+import AppointmentDetail from '../../src/pages/admin/AppointmentDetail'
 import '../../src/index.css'
 
 const root = createRoot(document.getElementById('root')!)
@@ -14,6 +15,15 @@ const routeToken = new URLSearchParams(location.search).get('token')
 function render() {
   // 'status-route' monta a rota real /agendamento/:token para provar que o
   // token vem da URL — é assim que alguém volta dias depois pelo link.
+  // Detalhe administrativo do agendamento: precisa da rota real para o :id.
+  if (page === 'appointment') {
+    root.render(<MemoryRouter initialEntries={['/admin/agenda/' + routeToken]}><AuthProvider>
+      <main className="max-w-md mx-auto w-full p-4">
+        <Routes><Route path="/admin/agenda/:id" element={<AppointmentDetail />} /></Routes>
+      </main>
+    </AuthProvider></MemoryRouter>)
+    return
+  }
   if (page === 'status-route') {
     root.render(<MemoryRouter initialEntries={['/agendamento/' + routeToken]}><AuthProvider>
       <main className="max-w-md mx-auto w-full px-4 py-6">

@@ -87,10 +87,23 @@ export const BookingRules = {
    * AWAITING_PAYMENT. Vencida sem pagamento, a solicitação expira e o horário
    * volta a ser oferecido, exatamente como uma pendente abandonada.
    *
+   * Este é o prazo do pagamento com PROVEDOR: a confirmação chega por webhook
+   * em segundos, então 15 minutos já é folga generosa.
+   *
    * Mora aqui, com as outras regras de agenda, em vez de num número solto no
    * meio do serviço de pagamento.
    */
   paymentWindowMinutes: 15,
+
+  /**
+   * Janela do Pix ESTÁTICO — o dobro, porque o gargalo é humano.
+   *
+   * Aqui ninguém nos notifica: o cliente paga e alguém da barbearia precisa
+   * abrir o extrato, encontrar o lançamento e confirmar no painel. Entre
+   * atender uma pessoa e conferir o celular, 15 minutos derrubam reservas
+   * legitimamente pagas. 30 dão margem sem prender a agenda por horas.
+   */
+  staticPixPaymentWindowMinutes: 30,
 
   /**
    * Quanto cobrar para confirmar.
@@ -123,6 +136,21 @@ export function paymentAmountCents(servicePriceCents: number): number {
   // O sinal nunca passa do preço: um piso alto num serviço barato viraria
   // cobrança maior que o serviço.
   return Math.min(servicePriceCents, Math.max(share, BookingRules.depositMinimumCents))
+}
+
+/**
+ * Prazo de pagamento conforme a forma de recebimento.
+ *
+ * Um ponto só decide isto, para o número não se espalhar pelo código. Quando um
+ * provedor real precisar de outra janela, é aqui que ela entra — sem tocar em
+ * quem só quer saber "até quando esta reserva vale".
+ */
+export function paymentWindowMinutesFor(
+  method: "STATIC_PIX" | "DYNAMIC_PROVIDER_PIX" | "NONE",
+): number {
+  return method === "STATIC_PIX"
+    ? BookingRules.staticPixPaymentWindowMinutes
+    : BookingRules.paymentWindowMinutes
 }
 
 /**

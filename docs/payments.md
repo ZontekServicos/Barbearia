@@ -182,3 +182,116 @@ registrado para estorno. `COMPLETED` e `NO_SHOW` continuam exigindo `CONFIRMED`.
 
 A transição roda sob lock da linha, então cancelamento e webhook simultâneos
 resolvem num único estado — nunca nos dois.
+
+## Pix
+
+### Dois caminhos, nunca misturados
+
+| | `STATIC_PIX` | `DYNAMIC_PROVIDER_PIX` |
+| --- | --- | --- |
+| Configuração | `BARBERSHOP_PIX_KEY` + nome + cidade | `PAYMENT_PROVIDER` |
+| QR | montado por nós, a partir da chave | o da cobrança do provedor |
+| Chave exibida | sim, com botão de copiar | não |
+| Confirmação | **manual**, pela barbearia | automática, por webhook |
+
+`paymentMethod` resolve na ordem **provedor → Pix estático → nenhum**. Com os
+dois configurados, o provedor ganha: só a cobrança dele se concilia sozinha.
+
+**Não existe queda de um para o outro.** Se a cobrança é de provedor e o
+"Copia e Cola" dele vier inválido, a tela não oferece o Pix estático: o cliente
+pagaria na conta da barbearia um valor que o provedor nunca vai conciliar,
+enquanto o sistema espera um webhook sobre dinheiro que foi para outro lugar.
+Nesse caso não há QR, e a tela manda falar com a barbearia.
+
+### O QR é um BR Code de verdade
+
+Montado em `modules/payment/pix/brcode.ts` conforme o padrão EMV®QRCPS do Banco
+Central: campos `ID + tamanho + valor` e CRC16/CCITT-FALSE. Um QR com a chave em
+texto cru **não** é um pagamento — o aplicativo do banco mostra "QR inválido".
+
+O CRC é verificado no teste contra o valor canônico do algoritmo
+(`"123456789"` → `29B1`), que é o que prova ser a variante certa. Vetores de
+payload Pix copiados de memória não servem como referência.
+
+O **valor entra no QR**, então o aplicativo abre com a quantia certa e o cliente
+não digita nem erra. Vem de `paymentAmountCents` sobre o preço congelado no
+agendamento; não há parâmetro por onde o navegador informar quanto cobrar.
+
+A referência pública viaja como `txid` (só letras e números: `EC-7F3K2Q` →
+`EC7F3K2Q`), o que permite conciliar no extrato.
+
+### O que o Pix estático NÃO faz
+
+Exibir o QR, copiar a chave, copiar o código ou recarregar a tela **não mudam
+estado nenhum**. Não existe botão "já paguei", e nenhuma rota pública aceita
+"pago" — nem poderia: a única transição para `PAID` sem provedor é
+`POST /admin/appointments/:id/payment`, que exige sessão de ADMIN ativa, recusa
+cobrança de provedor, roda sob lock da linha e fica na trilha de auditoria.
+
+O texto na tela acompanha quem confirma: no estático, *"Após o pagamento,
+aguarde a confirmação da barbearia"*; no dinâmico, *"A confirmação é automática"*.
+Dizer "automática" num Pix estático faria a pessoa não avisar a barbearia e
+perder o horário.
+
+### Configuração
+
+Chave, nome e cidade são as três obrigatórias em conjunto — sem nome ou cidade o
+BR Code é recusado pelo aplicativo do banco, então a validação de ambiente exige
+as três ou nenhuma.
+
+Prefira **chave aleatória**: telefone, CPF e e-mail ficam estampados no QR de
+todo mundo que for pagar.
+
+A chave só sai pela tela de pagamento de um pedido específico. `GET /booking/policy`
+informa apenas o *método* — nunca a chave nem o recebedor.
+
+## Confirmação do Pix pelo painel
+
+O barbeiro confere o extrato e registra o resultado em
+**Agenda → agendamento → Pagamento**. A rota é
+`POST /admin/appointments/:id/payment` com `{ decision: "PAID" | "FAILED" }` — e
+só isso. Valor, data do pagamento, provedor e o novo estado do agendamento são
+resolvidos pelo servidor a partir da cobrança; o painel não tem por onde
+influenciar nenhum deles.
+
+Quem decide se o botão existe é o **servidor**, em `canConfirmManually`: Pix da
+barbearia, cobrança em aberto, horário aguardando pagamento e prazo válido, as
+quatro juntas. O navegador não recombina essas condições esperando acertar todas.
+
+Cobrança de provedor nunca oferece confirmação manual — ali quem confirma é o
+webhook dele, e a tela diz isso.
+
+`FAILED` registra que o dinheiro não foi encontrado **sem** destruir a reserva:
+dentro do prazo o cliente ainda pode pagar, e o barbeiro pode confirmar depois.
+
+Confirmar exige modal repetindo cliente, serviço, valor, data, horário e
+referência. Um clique direto na lista confirmaria dinheiro por engano, e desfazer
+isso significa ligar para o cliente.
+
+Duas sessões confirmando ao mesmo tempo: uma vence, a outra recebe **409** com
+`"Este pagamento já foi confirmado."` — que o painel mostra como **aviso**, não
+como falha, e então recarrega o estado real. Erro vermelho genérico ali só faria
+o barbeiro clicar de novo.
+
+### Janela de 30 minutos no Pix manual
+
+`BookingRules.staticPixPaymentWindowMinutes = 30`, contra 15 do provedor, porque
+o gargalo é humano: ninguém nos notifica, então alguém precisa abrir o extrato,
+achar o lançamento e confirmar. Entre atender uma pessoa e conferir o celular, 15
+minutos derrubam reservas legitimamente pagas.
+
+`paymentWindowMinutesFor(method)` é o único lugar que decide isso — inclusive
+para o número que a tela do cliente mostra. Quando um provedor real precisar de
+outra janela, é ali que ela entra.
+
+### Prazo vencido
+
+O botão normal **desaparece**. No lugar entra o aviso de que o horário voltou a
+ficar disponível e que um Pix recebido depois precisa de tratamento manual com o
+cliente.
+
+Confirmar num clique ali poderia fechar um horário já oferecido a outra pessoa.
+O servidor continua aceitando a conciliação enquanto a reserva não tiver sido
+tomada — e recusa com conflito quando tiver, porque a varredura já a expirou.
+Nunca há double booking: a `EXCLUDE` cobre `AWAITING_PAYMENT` até a expiração
+efetiva.

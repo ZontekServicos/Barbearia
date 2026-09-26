@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, LayoutList, AlertCircle, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LayoutList, AlertCircle, RefreshCw, Wallet } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ApiError, isAbortError } from '@/services/api'
@@ -36,6 +36,10 @@ function todayISO() {
 function statusColor(status: AppointmentStatus) {
   switch (status) {
     case 'CONFIRMED': return 'border-l-[var(--primary)]'
+    // Âmbar, e só aqui: aguardando pagamento é o estado que depende de uma ação
+    // da barbearia, e confundi-lo com confirmado significa alguém não conferir
+    // o extrato — ou pior, achar que já conferiu.
+    case 'AWAITING_PAYMENT': return 'border-l-amber-400'
     case 'COMPLETED': return 'border-l-green-500'
     case 'CANCELLED': return 'border-l-red-500'
     case 'NO_SHOW': return 'border-l-orange-500'
@@ -254,6 +258,22 @@ export default function Agenda() {
                   </span>
                   <StatusBadge status={appointment.status} />
                 </div>
+                {/*
+                  Chamada explícita para o que depende da barbearia. O rótulo do
+                  status diz o estado; esta linha diz que há algo a FAZER — e o
+                  item inteiro já é o link para a tela onde se faz.
+                */}
+                {appointment.payment?.canConfirmManually && (
+                  <p className="w-full text-xs font-medium text-amber-400 flex items-center gap-1.5">
+                    <Wallet className="h-3.5 w-3.5 shrink-0" />
+                    Pix de R$ {appointment.payment.amountFormatted} a conferir — abrir para confirmar
+                  </p>
+                )}
+                {appointment.payment?.windowClosed && appointment.payment.status === 'PENDING' && (
+                  <p className="w-full text-xs font-medium text-amber-400/80">
+                    Prazo de pagamento vencido
+                  </p>
+                )}
               </Link>
             ))}
           </div>

@@ -269,3 +269,13 @@ export const publicTokenParamSchema = z.object({
 export const decideRequestSchema = z.strictObject({
   decision: z.enum(["CONFIRMED", "REJECTED"]),
 })
+
+/**
+ * Decisão administrativa sobre um pagamento em Pix estático.
+ *
+ * `strictObject`: nada de valor, data de pagamento ou status de agendamento
+ * vindo do navegador — o servidor decide tudo a partir da cobrança no banco.
+ */
+export const settlePaymentSchema = z.strictObject({
+  decision: z.enum(["PAID", "FAILED"]),
+})

@@ -19,14 +19,14 @@ import {
   publicRequestLookupRateLimit,
 } from "../../middlewares/rate-limit.js"
 import { processPaymentWebhook } from "../payment/payment.service.js"
-import { paymentsEnabled } from "../../config/env.js"
+import { paymentMethod, paymentsEnabled } from "../../config/env.js"
 import type { RequestWithRawBody } from "../../app.js"
 import {
   getPublicRequest,
   registerPublicContact,
   requestPublicAppointment,
 } from "./public-booking.service.js"
-import { BookingRules } from "./booking.rules.js"
+import { BookingRules, paymentWindowMinutesFor } from "./booking.rules.js"
 import { listActiveServices } from "./catalog.service.js"
 import { getAvailability } from "./availability.service.js"
 import {
@@ -230,7 +230,19 @@ bookingRouter.get("/policy", async (_req, res) => {
      * confirmado. Servido daqui em vez de duplicado no navegador.
      */
     paymentRequired: paymentsEnabled,
-    paymentWindowMinutes: BookingRules.paymentWindowMinutes,
+    // A janela da forma vigente, não a constante: com Pix estático o cliente
+    // tem o dobro do tempo, e a tela precisa dizer o número certo.
+    paymentWindowMinutes: paymentWindowMinutesFor(paymentMethod),
+    /**
+     * Como o pagamento é recebido, para a tela dizer a verdade sobre o que
+     * acontece depois de pagar: no dinâmico a confirmação é automática, no
+     * estático alguém da barbearia confere.
+     *
+     * Só o método. Chave, nome do recebedor e configuração de provedor não
+     * saem daqui — quem precisa deles é a tela de pagamento de um pedido
+     * específico, e lá eles vêm junto da cobrança.
+     */
+    paymentMethod,
   })
 })
 

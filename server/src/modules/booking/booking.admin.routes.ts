@@ -1,9 +1,11 @@
 import { Router } from "express"
 import type { z } from "zod"
 import { validate } from "../../middlewares/validate.js"
+import { settleStaticPayment } from "../payment/payment.service.js"
 import { sendSuccess } from "../../utils/http.js"
 import {
   decideRequestSchema,
+  settlePaymentSchema,
   adminAgendaQuerySchema,
   createBlockSchema,
   createServiceSchema,
@@ -186,5 +188,28 @@ bookingAdminRouter.post(
     const { decision } = req.body as z.infer<typeof decideRequestSchema>
     const appointment = await decidePendingRequest(req.user!.id, id, decision)
     return sendSuccess(res, { appointment })
+  },
+)
+
+/**
+ * Confirma (ou recusa) um pagamento recebido por Pix ESTÁTICO.
+ *
+ * Herda `requireAuth + requireActiveAccount + requireRole("ADMIN")` do router.
+ *
+ * Existe porque o Pix estático não tem quem notifique: o dinheiro cai na conta
+ * e alguém da barbearia confere no extrato. Sem isto, um agendamento pago
+ * ficaria preso aguardando pagamento até a janela vencer.
+ *
+ * Recusada para cobrança de provedor — ali quem confirma é o webhook. E o
+ * cliente não alcança esta rota: exige sessão administrativa ativa.
+ */
+bookingAdminRouter.post(
+  "/appointments/:id/payment",
+  validate({ params: uuidParamSchema, body: settlePaymentSchema }),
+  async (req, res) => {
+    const { id } = req.params as z.infer<typeof uuidParamSchema>
+    const { decision } = req.body as z.infer<typeof settlePaymentSchema>
+    await settleStaticPayment(req.user!.id, id, decision)
+    return sendSuccess(res, { appointment: await getAppointmentForAdmin(id) })
   },
 )

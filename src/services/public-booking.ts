@@ -56,6 +56,31 @@ export interface PaymentView {
 }
 
 /**
+ * Dados do Pix, montados pelo backend.
+ *
+ * O navegador não calcula nada aqui: payload, QR e valor chegam prontos. Chave
+ * Pix e BR Code são públicos por natureza — quem paga precisa deles.
+ */
+export interface PixView {
+  /**
+   * `DYNAMIC_PROVIDER_PIX` — cobrança do provedor, confirmação automática.
+   * `STATIC_PIX` — Pix da barbearia, alguém de lá confere.
+   */
+  source: 'DYNAMIC_PROVIDER_PIX' | 'STATIC_PIX'
+  /** BR Code completo: o "Pix Copia e Cola". */
+  copyPaste: string
+  /** QR do BR Code, já em SVG. */
+  qrCodeSvg: string
+  /** Chave da barbearia — só no Pix estático. */
+  key: string | null
+  /** `5f79…8c21`, para a tela não estampar a chave inteira. */
+  keyMasked: string | null
+  receiverName: string | null
+  /** `true` quando a confirmação depende de alguém da barbearia conferir. */
+  requiresManualConfirmation: boolean
+}
+
+/**
  * O pedido inteiro, como quem tem o token pode vê-lo.
  *
  * `whatsappUrl` vem pronto do backend e só existe quando o agendamento está
@@ -69,6 +94,10 @@ export interface BookingRequestView {
   reference: string | null
   payment: PaymentView | null
   whatsappUrl: string | null
+  /** Pix a pagar. Só enquanto a cobrança está em aberto. */
+  pix: PixView | null
+  /** "Falar com a barbearia" durante o pagamento. Não afirma confirmação. */
+  paymentHelpUrl: string | null
 }
 
 export async function getBookingRequest(
@@ -126,6 +155,8 @@ export interface BookingPolicy {
   paymentRequired: boolean
   /** Janela para pagar depois da aprovação, em minutos. */
   paymentWindowMinutes: number
+  /** Como o pagamento é recebido nesta instalação. */
+  paymentMethod: 'DYNAMIC_PROVIDER_PIX' | 'STATIC_PIX' | 'NONE'
 }
 
 /**

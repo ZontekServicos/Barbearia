@@ -1,6 +1,29 @@
 import { apiRequest } from "./api"
 import type { Appointment, AppointmentStatus, BusinessHoursDay, Service } from "./booking"
 
+/**
+ * Cobrança como o painel a vê.
+ *
+ * Sem id de pagamento, id de cobrança do provedor ou nome do adaptador: nada
+ * disso ajuda o barbeiro a decidir, e todos são identificadores internos.
+ *
+ * `canConfirmManually` é decidido pelo SERVIDOR. O botão não recombina quatro
+ * condições no navegador esperando acertar todas.
+ */
+export interface AdminPayment {
+  /** `PIX_MANUAL` confirma pelo painel; `PROVIDER` depende do webhook dele. */
+  method: "PIX_MANUAL" | "PROVIDER"
+  status: "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELED"
+  amountCents: number
+  amountFormatted: string
+  canConfirmManually: boolean
+  expiresAt: string
+  expiresInSeconds: number
+  /** Prazo vencido com cobrança em aberto: exige tratamento manual. */
+  windowClosed: boolean
+  paidAt: string | null
+}
+
 export interface AdminAppointment extends Appointment {
   customer: {
     id: string
@@ -8,6 +31,9 @@ export interface AdminAppointment extends Appointment {
     phone: string
     phoneFormatted: string
   }
+  /** Referência pública curta ("EC-7F3K2Q"). Nasce na aprovação. */
+  reference: string | null
+  payment: AdminPayment | null
 }
 
 export interface ScheduleBlock {
@@ -107,6 +133,27 @@ export async function updateAppointmentStatus(
   const data = await apiRequest<{ appointment: AdminAppointment }>(
     `/admin/appointments/${id}/status`,
     { method: "PATCH", body: { status } },
+  )
+  return data.appointment
+}
+
+/**
+ * Registra o resultado da conferência de um Pix recebido por fora.
+ *
+ * O corpo leva SÓ a decisão. Valor, data do pagamento, provedor e o novo estado
+ * do agendamento são resolvidos pelo servidor a partir da cobrança no banco —
+ * o painel não tem como influenciar nenhum deles, e não deveria.
+ *
+ * `PAID` confirma o agendamento. `FAILED` registra que o dinheiro não foi
+ * encontrado, sem destruir a reserva: dentro do prazo ainda dá para tentar.
+ */
+export async function settleAppointmentPayment(
+  id: string,
+  decision: "PAID" | "FAILED",
+): Promise<AdminAppointment> {
+  const data = await apiRequest<{ appointment: AdminAppointment }>(
+    `/admin/appointments/${id}/payment`,
+    { method: "POST", body: { decision } },
   )
   return data.appointment
 }

@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  AlertCircle, Check, Clock, Copy, Hourglass, MessageCircle, RefreshCw, XCircle,
+  AlertCircle, Check, Clock, Hourglass, MessageCircle, RefreshCw, XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, isAbortError } from '@/services/api'
+import PixPayment from '@/components/booking/PixPayment'
 import {
   forgetRequestToken,
   getBookingRequest,
   readRequestToken,
   type BookingRequestView,
   type PaymentView,
+  type PixView,
 } from '@/services/public-booking'
 import { cn } from '@/lib/utils'
 
@@ -148,7 +150,12 @@ export default function BookingStatus() {
       <Details view={view} />
 
       {view.appointment.status === 'AWAITING_PAYMENT' && view.payment && (
-        <PaymentPanel payment={view.payment} onRefresh={() => void load({ quiet: true })} />
+        <PaymentPanel
+          payment={view.payment}
+          pix={view.pix}
+          helpUrl={view.paymentHelpUrl}
+          onRefresh={() => void load({ quiet: true })}
+        />
       )}
 
       {view.appointment.status === 'CONFIRMED' && <Confirmed view={view} />}
@@ -180,14 +187,16 @@ function StatusHeader({ view }: { view: BookingRequestView }) {
   const presentation = {
     PENDING: {
       icon: <Hourglass className="h-9 w-9 text-[var(--primary)]" />,
-      title: 'Aguardando confirmação',
+      title: 'Aguardando aprovação',
       // Nunca "confirmado" antes de a barbearia decidir.
       message: 'A barbearia está avaliando seu pedido. Seguramos este horário enquanto isso.',
     },
     AWAITING_PAYMENT: {
       icon: <Clock className="h-9 w-9 text-[var(--primary)]" />,
-      title: 'Pedido aprovado!',
-      message: 'Falta o pagamento para confirmar. Seu horário está reservado durante esse prazo.',
+      title: 'Seu horário foi aprovado!',
+      // A palavra "confirmado" não aparece aqui de propósito: o agendamento
+      // ainda não está, e prometer isso é o erro que faz a pessoa não pagar.
+      message: 'Agora realize o pagamento para confirmar o agendamento.',
     },
     CONFIRMED: {
       icon: <Check className="h-10 w-10 text-[var(--primary)]" />,
@@ -198,7 +207,7 @@ function StatusHeader({ view }: { view: BookingRequestView }) {
     },
     REJECTED: {
       icon: <XCircle className="h-9 w-9 text-[var(--destructive)]" />,
-      title: 'Pedido não aceito',
+      title: 'Solicitação recusada',
       message: 'A barbearia não conseguiu atender neste horário. Você pode escolher outro.',
     },
     EXPIRED: {
@@ -260,7 +269,22 @@ function Details({ view }: { view: BookingRequestView }) {
         label="Horário"
         value={`${appointment.startsAtClock} – ${appointment.endsAtClock}`}
       />
-      <Row label="Valor" value={`R$ ${appointment.servicePriceFormatted}`} />
+      <Row label="Valor do serviço" value={`R$ ${appointment.servicePriceFormatted}`} />
+      {/*
+        Linha separada para o que está sendo cobrado. Só aparece quando difere
+        do preço do serviço — no modo sinal, por exemplo. Repetir o mesmo número
+        com dois rótulos confundiria mais do que informa.
+      */}
+      {view.payment && view.payment.amountFormatted !== appointment.servicePriceFormatted && (
+        <Row
+          label={view.payment.status === 'PAID' ? 'Valor pago' : 'Valor a pagar'}
+          value={`R$ ${view.payment.amountFormatted}`}
+        />
+      )}
+      {view.payment?.status === 'PAID' &&
+        view.payment.amountFormatted === appointment.servicePriceFormatted && (
+          <Row label="Pagamento" value="Pago" />
+        )}
       {view.reference && (
         <Row
           label="Referência"
@@ -289,9 +313,13 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
  */
 function PaymentPanel({
   payment,
+  pix,
+  helpUrl,
   onRefresh,
 }: {
   payment: PaymentView
+  pix: PixView | null
+  helpUrl: string | null
   onRefresh: () => void
 }) {
   // Contagem regressiva a partir do que o servidor informou. O relógio do
@@ -310,12 +338,10 @@ function PaymentPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remaining === 0])
 
-  const [copied, setCopied] = useState(false)
-
   const label = {
     PENDING: 'Aguardando pagamento',
     PAID: 'Pagamento confirmado',
-    FAILED: 'Pagamento recusado',
+    FAILED: 'Não foi possível confirmar o pagamento',
     EXPIRED: 'Pagamento expirado',
     CANCELED: 'Pagamento cancelado',
   }[payment.status]
@@ -326,18 +352,6 @@ function PaymentPanel({
       : payment.status === 'PENDING'
         ? 'border-[var(--primary)]/25 bg-[var(--surface-bronze)]'
         : 'border-[var(--destructive)]/40 bg-[var(--destructive)]/10'
-
-  async function copyPix() {
-    if (!payment.pixQrCode) return
-    try {
-      await navigator.clipboard.writeText(payment.pixQrCode)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Área de transferência bloqueada: o código segue visível para copiar
-      // à mão. Não é motivo para mostrar erro.
-    }
-  }
 
   return (
     <section className={cn('rounded-2xl border p-4 space-y-4', tone)}>
@@ -373,31 +387,44 @@ function PaymentPanel({
             )}
           </p>
 
+          {/* Pix: QR, chave e Copia e Cola, tudo montado no backend. */}
+          {pix && <PixPayment pix={pix} amountFormatted={payment.amountFormatted} />}
+
+          {/*
+            Checkout do provedor, quando existe. Complementa o Pix em vez de
+            substituí-lo: alguns provedores oferecem cartão na mesma cobrança.
+          */}
           {payment.checkoutUrl && (
-            <Button className="w-full h-11" asChild>
+            <Button variant={pix ? 'outline' : 'default'} className="w-full h-11" asChild>
               <a href={payment.checkoutUrl} target="_blank" rel="noopener noreferrer">
-                Pagar agora
+                Abrir outras formas de pagamento
               </a>
             </Button>
           )}
 
-          {payment.pixQrCode && (
-            <div className="space-y-2">
-              <p className="text-xs text-[var(--muted-foreground)]">Pix copia e cola</p>
-              <p className="font-mono text-[11px] leading-relaxed break-all rounded-lg bg-black/30 p-3 text-[var(--muted-foreground)]">
-                {payment.pixQrCode}
-              </p>
-              <Button variant="outline" className="w-full h-11" onClick={copyPix}>
-                <Copy className="h-4 w-4 mr-2" />
-                {copied ? 'Código copiado' : 'Copiar código Pix'}
-              </Button>
-            </div>
+          {/*
+            Sem Pix apresentável e sem checkout: não inventamos QR nenhum. A
+            pessoa fala com a barbearia, que é a única saída honesta aqui.
+          */}
+          {!pix && !payment.checkoutUrl && (
+            <p className="text-sm text-[var(--foreground)]">
+              Não conseguimos gerar o pagamento agora. Fale com a barbearia para
+              combinar o pagamento e garantir seu horário.
+            </p>
           )}
 
-          <p className="text-xs text-[var(--muted-foreground)]">
-            A confirmação é automática assim que o pagamento é processado. Você
-            não precisa avisar ninguém.
-          </p>
+          {/*
+            "Falar com a barbearia" durante o pagamento — mensagem que diz
+            APROVADO, nunca confirmado.
+          */}
+          {helpUrl && (
+            <Button variant="ghost" className="w-full h-11 text-[var(--primary)]" asChild>
+              <a href={helpUrl} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="h-4 w-4 mr-2" />
+                Falar com a barbearia
+              </a>
+            </Button>
+          )}
         </>
       )}
 

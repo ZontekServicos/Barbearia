@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
+import PaymentSection from '@/components/admin/PaymentSection'
 import { ApiError } from '@/services/api'
 import {
   getAdminAppointment,
@@ -179,6 +180,16 @@ export default function AppointmentDetail() {
           )}
         </div>
       </div>
+
+      {/*
+        Pagamento vem antes de Ações porque é o que decide o que fazer: um
+        horário aguardando Pix não deve ser concluído nem marcado como falta.
+      */}
+      {appointment.payment && (
+        <div className="mb-6">
+          <PaymentSection appointment={appointment} onSettled={setAppointment} />
+        </div>
+      )}
 
       <div className="border border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] rounded-2xl p-5 space-y-2">
         <p className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-3">Ações</p>

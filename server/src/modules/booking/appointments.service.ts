@@ -16,7 +16,12 @@ import {
   type AdminAppointment,
   type PublicAppointment,
 } from "./booking.mapper.js"
-import { BookingRules, paymentAmountCents, reservedMinutesFor } from "./booking.rules.js"
+import {
+  BookingRules,
+  paymentAmountCents,
+  paymentWindowMinutesFor,
+  reservedMinutesFor,
+} from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { listBookableStartMinutes } from "./availability.service.js"
 import { fitsInAnyWindow, windowsFromBusinessHours } from "./availability.engine.js"
@@ -27,8 +32,9 @@ import { generateUniquePublicReference } from "./public-reference.js"
 import {
   createPaymentForAppointment,
   paymentRequestFor,
-  paymentsAvailable,
 } from "../payment/payment.service.js"
+import { paymentMethod } from "../../config/env.js"
+import { STATIC_PIX_PROVIDER } from "../payment/pix/pix.service.js"
 import { requirePaymentProvider } from "../payment/payment.registry.js"
 import { generatePublicToken, digestPublicToken } from "./public-token.js"
 
@@ -318,7 +324,12 @@ export async function listAgenda(
           : status ? { status } : {}),
     },
     orderBy: { startsAt: "asc" },
-    include: { user: { select: { id: true, fullName: true, phone: true } } },
+    include: {
+      user: { select: { id: true, fullName: true, phone: true } },
+      // A cobrança acompanha o agendamento no painel: é por ela que a
+      // barbearia sabe se falta pagar e se pode confirmar o recebimento.
+      payment: { select: { provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true } },
+    },
     take: 500,
   })
 
@@ -328,7 +339,12 @@ export async function listAgenda(
 export async function getAppointmentForAdmin(id: string): Promise<AdminAppointment> {
   const appointment = await prisma.appointment.findUnique({
     where: { id },
-    include: { user: { select: { id: true, fullName: true, phone: true } } },
+    include: {
+      user: { select: { id: true, fullName: true, phone: true } },
+      // A cobrança acompanha o agendamento no painel: é por ela que a
+      // barbearia sabe se falta pagar e se pode confirmar o recebimento.
+      payment: { select: { provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true } },
+    },
   })
 
   if (!appointment) {
@@ -490,7 +506,12 @@ export async function decidePendingRequest(
     | {
         reference: string
         expiresAt: Date
-        created: { providerPaymentId: string; checkoutUrl?: string; pixQrCode?: string }
+        created: {
+          provider: string
+          providerPaymentId?: string
+          checkoutUrl?: string
+          pixQrCode?: string
+        }
       }
     | undefined
 
@@ -542,15 +563,30 @@ export async function decidePendingRequest(
      * pagamento configurado.
      */
     const amountCents = paymentAmountCents(pending.servicePriceCents)
-    if (paymentsAvailable() && amountCents > 0) {
+    if (amountCents > 0 && paymentMethod !== "NONE") {
       const expiresAt = new Date(
-        decidedAt.getTime() + BookingRules.paymentWindowMinutes * 60_000,
+        decidedAt.getTime() + paymentWindowMinutesFor(paymentMethod) * 60_000,
       )
-      const provider = requirePaymentProvider()
-      const created = await provider.createPayment(
-        paymentRequestFor({ ...pending, publicReference: reference }, expiresAt),
-      )
-      prepared = { reference, expiresAt, created }
+      if (paymentMethod === "DYNAMIC_PROVIDER_PIX") {
+        // Cobrança no provedor: uma por agendamento, com QR próprio e
+        // confirmação automática por webhook.
+        const provider = requirePaymentProvider()
+        const created = await provider.createPayment(
+          paymentRequestFor({ ...pending, publicReference: reference }, expiresAt),
+        )
+        prepared = { reference, expiresAt, created: { provider: provider.name, ...created } }
+      } else {
+        /**
+         * Pix ESTÁTICO: não há terceiro a chamar. O BR Code é montado na hora de
+         * exibir, a partir da chave configurada e do valor desta reserva, então
+         * aqui basta abrir a cobrança e marcar o prazo.
+         *
+         * Ninguém nos avisa quando o dinheiro entra — a confirmação é
+         * administrativa. É por isso que este caminho NÃO pode se apresentar
+         * como pagamento confirmado em nenhum momento.
+         */
+        prepared = { reference, expiresAt, created: { provider: STATIC_PIX_PROVIDER } }
+      }
     }
   }
 

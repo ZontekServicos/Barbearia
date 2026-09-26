@@ -87,6 +87,28 @@ const envSchema = z
      * confirmação. Uma configuração só, em vez do número repetido em
      * componentes. Ausente = botão não é oferecido.
      */
+    /**
+     * Pix ESTÁTICO da barbearia — o recebimento manual, sem provedor.
+     *
+     * Chave, nome e cidade do recebedor entram no BR Code. Prefira chave
+     * ALEATÓRIA: telefone, CPF e e-mail ficam estampados no QR de todo mundo
+     * que for pagar, e a chave aleatória não expõe dado pessoal nenhum.
+     *
+     * Ausente = Pix estático desligado.
+     */
+    BARBERSHOP_PIX_KEY: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().min(4, "Chave Pix muito curta.").max(77, "Chave Pix muito longa.").optional(),
+    ),
+    BARBERSHOP_PIX_RECEIVER_NAME: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().min(2).max(25, "O padrão do BR Code limita o nome a 25 caracteres.").optional(),
+    ),
+    BARBERSHOP_PIX_RECEIVER_CITY: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().trim().min(2).max(15, "O padrão do BR Code limita a cidade a 15 caracteres.").optional(),
+    ),
+
     BARBERSHOP_WHATSAPP_NUMBER: z.preprocess(
       (v) => (v === "" ? undefined : v),
       z
@@ -154,6 +176,21 @@ const envSchema = z
           "O provedor 'manual' é de teste e não pode ser usado em produção. Configure um provedor real.",
       })
     }
+    // Chave Pix sem nome/cidade do recebedor gera BR Code que o aplicativo do
+    // banco recusa. Ou os três, ou nenhum.
+    const pixParts = [
+      env.BARBERSHOP_PIX_KEY,
+      env.BARBERSHOP_PIX_RECEIVER_NAME,
+      env.BARBERSHOP_PIX_RECEIVER_CITY,
+    ]
+    if (pixParts.some(Boolean) && !pixParts.every(Boolean)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["BARBERSHOP_PIX_KEY"],
+        message:
+          "Pix estático exige BARBERSHOP_PIX_KEY, BARBERSHOP_PIX_RECEIVER_NAME e BARBERSHOP_PIX_RECEIVER_CITY juntos.",
+      })
+    }
     // Sem segredo não há como distinguir a notificação do provedor de um POST
     // qualquer na internet — e o webhook é o que confirma o pagamento.
     if (env.PAYMENT_PROVIDER && !env.PAYMENT_WEBHOOK_SECRET) {
@@ -199,4 +236,33 @@ export const allowedOrigins: string[] = env.FRONTEND_URL.split(",")
  * aprovação do barbeiro confirma a reserva direto — o comportamento anterior
  * a esta versão, preservado.
  */
-export const paymentsEnabled = Boolean(env.PAYMENT_PROVIDER)
+/**
+ * Como esta instalação recebe pagamento.
+ *
+ *   DYNAMIC_PROVIDER_PIX — provedor real: cobrança por cobrança, com QR próprio
+ *                          e confirmação automática por webhook. Tem PRIORIDADE
+ *                          sobre o Pix estático quando os dois estão configurados,
+ *                          porque só ele confirma sozinho.
+ *   STATIC_PIX           — Pix estático da barbearia: o cliente paga e ALGUÉM da
+ *                          barbearia confere. Não existe confirmação automática.
+ *   NONE                 — sem pagamento. Aprovar confirma direto, como antes.
+ */
+export type PaymentMethod = "DYNAMIC_PROVIDER_PIX" | "STATIC_PIX" | "NONE"
+
+export const paymentMethod: PaymentMethod = env.PAYMENT_PROVIDER
+  ? "DYNAMIC_PROVIDER_PIX"
+  : env.BARBERSHOP_PIX_KEY
+    ? "STATIC_PIX"
+    : "NONE"
+
+export const paymentsEnabled = paymentMethod !== "NONE"
+
+/** Configuração do Pix estático, quando completa. */
+export const staticPix =
+  env.BARBERSHOP_PIX_KEY && env.BARBERSHOP_PIX_RECEIVER_NAME && env.BARBERSHOP_PIX_RECEIVER_CITY
+    ? {
+        key: env.BARBERSHOP_PIX_KEY,
+        receiverName: env.BARBERSHOP_PIX_RECEIVER_NAME,
+        receiverCity: env.BARBERSHOP_PIX_RECEIVER_CITY,
+      }
+    : null

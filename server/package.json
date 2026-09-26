@@ -43,8 +43,9 @@
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
-    "zod": "^4.6.5",
-    "prisma": "7.10.0"
+    "prisma": "7.10.0",
+    "qrcode": "1.5.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
@@ -53,6 +54,7 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.23.15",
     "typescript": "~5.7.0"
   }

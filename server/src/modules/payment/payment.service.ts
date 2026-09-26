@@ -1,8 +1,10 @@
 import type { Prisma } from "../../generated/prisma/client.js"
 import { prisma } from "../../config/prisma.js"
 import { logger } from "../../utils/logger.js"
+import { AppError, ErrorCodes } from "../../utils/errors.js"
+import { STATIC_PIX_PROVIDER } from "./pix/pix.service.js"
 import { BookingRules, paymentAmountCents } from "../booking/booking.rules.js"
-import { getPaymentProvider, requirePaymentProvider } from "./payment.registry.js"
+import { getPaymentProvider, requirePaymentProvider as requirePaymentProviderForWebhook } from "./payment.registry.js"
 import type { RawWebhookRequest } from "./payment.provider.js"
 
 /**
@@ -85,15 +87,24 @@ export async function createPaymentForAppointment(
     serviceName: string
     publicReference: string
   },
-  created: { providerPaymentId: string; checkoutUrl?: string; pixQrCode?: string },
+  created: {
+    /**
+     * Quem recebe. Um provedor real, ou `static-pix` quando a barbearia recebe
+     * pelo próprio Pix — aí não há cobrança externa e `providerPaymentId` fica
+     * nulo, porque não existe identificador de terceiro a guardar.
+     */
+    provider: string
+    providerPaymentId?: string
+    checkoutUrl?: string
+    pixQrCode?: string
+  },
   expiresAt: Date,
 ): Promise<void> {
-  const provider = requirePaymentProvider()
   await tx.payment.create({
     data: {
       appointmentId: appointment.id,
-      provider: provider.name,
-      providerPaymentId: created.providerPaymentId,
+      provider: created.provider,
+      providerPaymentId: created.providerPaymentId ?? null,
       mode: BookingRules.paymentMode,
       amountCents: paymentAmountCents(appointment.servicePriceCents),
       currency: "BRL",
@@ -158,7 +169,9 @@ export async function processPaymentWebhook(
   request: RawWebhookRequest,
   now: Date = new Date(),
 ): Promise<{ outcome: WebhookOutcome }> {
-  const provider = requirePaymentProvider()
+  // Webhook só existe com provedor real. Pix estático não tem quem notifique —
+  // a confirmação dele é administrativa (ver confirmStaticPayment).
+  const provider = requirePaymentProviderForWebhook()
   // Assinatura inválida lança aqui, antes de qualquer acesso ao banco: uma
   // mensagem não autenticada não merece consulta.
   const notification = await provider.parseWebhook(request)
@@ -303,3 +316,85 @@ export function isPaymentWindowClosed(
 
 /** Pagamento está configurado nesta instalação? */
 export const paymentsAvailable = () => getPaymentProvider() !== null
+
+/**
+ * Confirmação ADMINISTRATIVA de um pagamento em Pix estático.
+ *
+ * Existe porque o Pix estático não tem quem notifique: o dinheiro cai na conta
+ * da barbearia e alguém de lá confere no extrato. Sem esta rota, um agendamento
+ * pago ficaria preso em AWAITING_PAYMENT até a janela vencer.
+ *
+ * O que ela NÃO é: um atalho para o cliente. Exige sessão de ADMIN ativa, e o
+ * cliente não tem como alcançá-la — nem clicando em "já paguei", que não existe.
+ *
+ * Recusada para cobrança de provedor: ali quem confirma é o webhook, e permitir
+ * confirmação manual abriria caminho para marcar pago algo que o provedor nunca
+ * recebeu.
+ *
+ * Roda sob lock da linha, pelo mesmo motivo do cancelamento: um webhook ou um
+ * cancelamento concorrente não pode ser sobrescrito.
+ */
+export async function settleStaticPayment(
+  actorId: string,
+  appointmentId: string,
+  decision: "PAID" | "FAILED",
+  now: Date = new Date(),
+): Promise<void> {
+  await prisma.$transaction(async tx => {
+    const actor = await tx.user.findUnique({ where: { id: actorId } })
+    if (actor?.role !== "ADMIN" || actor.status !== "ACTIVE") throw AppError.forbidden()
+
+    await lockAppointment(tx, appointmentId)
+    const appointment = await tx.appointment.findUnique({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Agendamento não encontrado.")
+    const payment = appointment.payment
+    if (!payment) {
+      throw AppError.badRequest(ErrorCodes.VALIDATION_ERROR, "Este agendamento não tem cobrança.")
+    }
+    if (payment.provider !== STATIC_PIX_PROVIDER) {
+      throw AppError.conflict(
+        ErrorCodes.CONFLICT,
+        "Esta cobrança é de provedor: a confirmação vem da notificação dele.",
+      )
+    }
+    if (payment.status === "PAID") {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Este pagamento já foi confirmado.")
+    }
+    if (appointment.status !== "AWAITING_PAYMENT") {
+      throw AppError.conflict(
+        ErrorCodes.CONFLICT,
+        "Este agendamento não está aguardando pagamento.",
+      )
+    }
+
+    if (decision === "PAID") {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "PAID", paidAt: now },
+      })
+      // Agora sim: aprovado pelo barbeiro E pagamento conferido.
+      await tx.appointment.update({
+        where: { id: appointmentId },
+        data: { status: "CONFIRMED", pendingExpiresAt: null },
+      })
+    } else {
+      // Não recebido: a cobrança falha, mas a reserva continua na janela — dá
+      // para tentar de novo enquanto o prazo não venceu.
+      await tx.payment.update({ where: { id: payment.id }, data: { status: "FAILED" } })
+    }
+
+    await tx.adminAuditLog.create({
+      data: {
+        actorId,
+        targetUserId: appointment.userId,
+        action: `PAYMENT_${decision}`,
+        metadata: { appointmentId, provider: payment.provider, amountCents: payment.amountCents },
+      },
+    })
+  })
+
+  logger.info("Pagamento em Pix estático decidido", { actorId, appointmentId, to: decision })
+}

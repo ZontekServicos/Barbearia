@@ -175,6 +175,40 @@ export function toPublicAppointment(appointment: AppointmentRecord): PublicAppoi
   }
 }
 
+/**
+ * Cobrança como a barbearia a vê no painel.
+ *
+ * O que NÃO está aqui, de propósito: id do pagamento, id da cobrança no
+ * provedor e nome do adaptador. Nenhum deles ajuda o barbeiro a decidir, e
+ * todos são identificadores internos. O que ele precisa saber é: quanto, como,
+ * em que estado, e se ele pode confirmar pelo painel — e é isso que sai.
+ */
+export interface AdminPayment {
+  /**
+   * `PIX_MANUAL` — Pix da barbearia, confirmação pelo painel.
+   * `PROVIDER`   — cobrança de provedor, confirmação por webhook.
+   */
+  method: "PIX_MANUAL" | "PROVIDER"
+  status: "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELED"
+  amountCents: number
+  /** "40,00" — já formatado, para a tela não reimplementar moeda. */
+  amountFormatted: string
+  /**
+   * A barbearia pode confirmar o recebimento pelo painel AGORA?
+   *
+   * Quem decide é o servidor. Assim o botão não depende de o navegador
+   * recombinar quatro condições e acertar todas.
+   */
+  canConfirmManually: boolean
+  /** Fim da janela de pagamento. */
+  expiresAt: string
+  /** Segundos restantes, nunca negativo. */
+  expiresInSeconds: number
+  /** Janela vencida com a cobrança ainda em aberto: exige tratamento manual. */
+  windowClosed: boolean
+  paidAt: string | null
+}
+
 export interface AdminAppointment extends PublicAppointment {
   customer: {
     id: string
@@ -182,21 +216,72 @@ export interface AdminAppointment extends PublicAppointment {
     phone: string
     phoneFormatted: string
   }
+  /** Referência pública curta ("EC-7F3K2Q"). Nasce na aprovação. */
+  reference: string | null
+  /** Cobrança, quando existe. `null` sem pagamento configurado. */
+  payment: AdminPayment | null
 }
+
+export interface AdminPaymentRecord {
+  provider: string
+  status: "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELED"
+  amountCents: number
+  expiresAt: Date
+  paidAt: Date | null
+}
+
+/** Nome do adaptador de Pix estático. Duplicado aqui para o mapper não
+ * depender do módulo de pagamento, que importa configuração de ambiente. */
+const STATIC_PIX = "static-pix"
 
 export function toAdminAppointment(
   appointment: AppointmentRecord & {
+    publicReference?: string | null
+    payment?: AdminPaymentRecord | null
     user: { id: string; fullName: string | null; phone: string }
   },
   formatPhone: (phone: string) => string,
+  now: Date = new Date(),
 ): AdminAppointment {
+  const view = toPublicAppointment(appointment)
+  const payment = appointment.payment ?? null
+  const windowClosed =
+    payment !== null && payment.status === "PENDING" && payment.expiresAt.getTime() <= now.getTime()
+
   return {
-    ...toPublicAppointment(appointment),
+    ...view,
     customer: {
       id: appointment.user.id,
       fullName: appointment.user.fullName,
       phone: appointment.user.phone,
       phoneFormatted: formatPhone(appointment.user.phone),
     },
+    reference: appointment.publicReference ?? null,
+    payment: payment
+      ? {
+          method: payment.provider === STATIC_PIX ? "PIX_MANUAL" : "PROVIDER",
+          status: payment.status,
+          amountCents: payment.amountCents,
+          amountFormatted: formatCents(payment.amountCents),
+          /**
+           * Confirmação manual exige as quatro condições juntas:
+           * Pix da barbearia, cobrança em aberto, horário aguardando pagamento
+           * e prazo ainda válido. Cobrança de provedor nunca — ali quem
+           * confirma é o webhook dele.
+           */
+          canConfirmManually:
+            payment.provider === STATIC_PIX &&
+            payment.status === "PENDING" &&
+            view.status === "AWAITING_PAYMENT" &&
+            !windowClosed,
+          expiresAt: payment.expiresAt.toISOString(),
+          expiresInSeconds: Math.max(
+            0,
+            Math.floor((payment.expiresAt.getTime() - now.getTime()) / 1000),
+          ),
+          windowClosed,
+          paidAt: payment.paidAt?.toISOString() ?? null,
+        }
+      : null,
   }
 }
