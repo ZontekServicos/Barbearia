@@ -1,6 +1,7 @@
 /** Códigos de erro estáveis, consumidos pelo frontend para decidir o que exibir. */
 export const ErrorCodes = {
   VALIDATION_ERROR: "VALIDATION_ERROR",
+  CONTACT_HANDLE_INVALID: "CONTACT_HANDLE_INVALID",
   INVALID_PHONE: "INVALID_PHONE",
   /// Resposta única de login malsucedido: telefone inexistente, senha errada e
   /// conta sem credencial estabelecida são indistinguíveis de fora.

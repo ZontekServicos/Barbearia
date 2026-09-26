@@ -82,7 +82,7 @@ export function errorHandler(
     path: safePath(req.path),
     method: req.method,
     name: error instanceof Error ? error.name : "UnknownError",
-    ...(isProduction || req.path.startsWith("/booking/requests")
+    ...(isProduction || req.path.startsWith("/booking/requests") || req.path.startsWith("/booking/contacts")
       ? {}
       : { stack: error instanceof Error ? error.stack : undefined }),
   })

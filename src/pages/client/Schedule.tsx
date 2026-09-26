@@ -28,6 +28,8 @@ import { looksLikeCompletePhone, maskPhone } from '@/lib/phone'
 import {
   requestBooking,
   rememberRequestToken,
+  registerContact,
+  type ContactRegistration,
   getBookingPolicy,
   type BookingPolicy,
   type BookingRequestResult,
@@ -41,7 +43,7 @@ import {
 type Step = 'phone' | 'service' | 'date' | 'time' | 'confirm' | 'success'
 
 const STEPS: { key: Step; label: string }[] = [
-  { key: 'phone', label: 'Contato' },
+  { key: 'phone', label: 'Cadastro' },
   { key: 'service', label: 'Serviço' },
   { key: 'date', label: 'Data' },
   { key: 'time', label: 'Horário' },
@@ -485,7 +487,7 @@ function ConfirmStep({
   date,
   slot,
   fullName,
-  phone,
+  phoneMasked,
   onConfirm,
   onBack,
   onEditContact,
@@ -497,7 +499,8 @@ function ConfirmStep({
   date: Date
   slot: AvailableSlot
   fullName: string
-  phone: string
+  /** Já mascarado pelo servidor: "(71) *****-6090". */
+  phoneMasked: string
   onConfirm: () => void
   onBack: () => void
   onEditContact: () => void
@@ -551,7 +554,7 @@ function ConfirmStep({
         <div className="p-4 border-t border-[var(--primary)]/20 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold truncate">{fullName}</p>
-            <p className="text-xs text-[var(--muted-foreground)] tabular-nums">{phone}</p>
+            <p className="text-xs text-[var(--muted-foreground)] tabular-nums">{phoneMasked}</p>
           </div>
           <button
             type="button"
@@ -598,33 +601,64 @@ function ConfirmStep({
   )
 }
 
-/** Primeira etapa: o WhatsApp basta para começar. Sem senha, sem código. */
-function PhoneStep({
+/**
+ * Primeira etapa do agendamento: cadastro.
+ *
+ * Nome e WhatsApp bastam. Sem senha, sem código, sem e-mail. O contato é
+ * gravado no backend ao continuar, então um telefone inválido é recusado aqui
+ * — não cinco etapas adiante, quando a pessoa já escolheu tudo.
+ */
+function ContactStep({
   phone,
   fullName,
   onChangePhone,
   onChangeName,
   onContinue,
+  loading,
+  error,
 }: {
   phone: string
   fullName: string
   onChangePhone: (value: string) => void
   onChangeName: (value: string) => void
   onContinue: () => void
+  loading: boolean
+  error: string | null
 }) {
   const ready = looksLikeCompletePhone(phone) && fullName.trim().length >= 2
 
   return (
     <form
-      onSubmit={event => { event.preventDefault(); if (ready) onContinue() }}
+      onSubmit={event => { event.preventDefault(); if (ready && !loading) onContinue() }}
       className="space-y-4"
     >
       <div className="mb-6">
-        <h2 className="text-xl font-bold tracking-tight">Vamos agendar seu horário?</h2>
+        <h2 className="text-xl font-bold tracking-tight">Vamos começar?</h2>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Informe seu WhatsApp para começar.
+          Informe seus dados para realizar o agendamento.
         </p>
       </div>
+
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+        >
+          {error}
+        </p>
+      )}
+
+      <Input
+        label="Nome completo"
+        type="text"
+        icon={<User className="h-4 w-4" />}
+        placeholder="João Silva"
+        value={fullName}
+        onChange={event => onChangeName(event.target.value)}
+        autoComplete="name"
+        maxLength={120}
+        required
+      />
 
       <Input
         label="WhatsApp"
@@ -639,20 +673,8 @@ function PhoneStep({
         required
       />
 
-      <Input
-        label="Seu nome"
-        type="text"
-        icon={<User className="h-4 w-4" />}
-        placeholder="João Silva"
-        value={fullName}
-        onChange={event => onChangeName(event.target.value)}
-        autoComplete="name"
-        maxLength={120}
-        required
-      />
-
-      <Button type="submit" className="w-full h-12 text-base" disabled={!ready}>
-        Continuar
+      <Button type="submit" className="w-full h-12 text-base" disabled={!ready || loading}>
+        {loading ? 'Salvando...' : 'Continuar'}
       </Button>
 
       <p className="text-xs text-center text-[var(--muted-foreground)]">
@@ -797,6 +819,29 @@ export default function Schedule() {
    * Existe uma seleção guardada? Lida UMA vez, na montagem, e apenas para
    * oferecer a retomada. Nada é restaurado sem a pessoa pedir.
    */
+  /**
+   * Contato já gravado no backend, com o handle das etapas seguintes.
+   *
+   * Vive só em memória: nome e telefone nunca vão para sessionStorage nem
+   * localStorage. Recarregar a página obriga a passar pelo cadastro de novo,
+   * que é o comportamento correto para dado pessoal.
+   */
+  const [contact, setContact] = useState<ContactRegistration | null>(null)
+  const [contactLoading, setContactLoading] = useState(false)
+  const [contactError, setContactError] = useState<string | null>(null)
+  const contactSubmission = useRef<AbortController | null>(null)
+  const previousContactHandle = useRef<string | undefined>(undefined)
+  useEffect(() => () => { contactSubmission.current?.abort() }, [])
+
+  function invalidateContact() {
+    contactSubmission.current?.abort()
+    contactSubmission.current = null
+    previousContactHandle.current = contact?.contactHandle ?? previousContactHandle.current
+    setContact(null)
+    setContactError(null)
+    setContactLoading(false)
+  }
+
   const [pendingIntent, setPendingIntent] = useState(() => readBookingIntent())
   // Política servida pelo backend: quem decide se o pedido aguarda aprovação
   // é a regra de negócio, não o navegador.
@@ -861,13 +906,49 @@ export default function Schedule() {
   }
 
   function discardIntent() {
+    invalidateContact()
+    setPhone('')
+    setFullName('')
     clearBookingIntent()
     setPendingIntent(null)
+    setContact(null)
     setService(null)
     setDate(null)
     setSlot(null)
     setNotice(null)
     setStep('phone')
+  }
+
+  /**
+   * Conclui a etapa de cadastro.
+   *
+   * Grava o contato no backend e guarda o handle. Editar nome ou telefone
+   * invalida o handle anterior (ver `onChange`), então voltar e alterar
+   * obriga uma nova validação — nada é aproveitado às cegas.
+   */
+  async function submitContact() {
+    if (contactSubmission.current) return
+    const controller = new AbortController()
+    contactSubmission.current = controller
+    setContactLoading(true)
+    setContactError(null)
+    try {
+      const registered = await registerContact(fullName.trim(), phone, { signal: controller.signal, previousHandle: contact?.contactHandle ?? previousContactHandle.current })
+      if (controller.signal.aborted) return
+      previousContactHandle.current = undefined
+      setContact(registered)
+      setNotice(null)
+      // Se a seleção já estava completa (retomada ou edição), volta direto
+      // para a revisão em vez de repetir as escolhas.
+      setStep(slot && service && date ? 'confirm' : 'service')
+    } catch (err) {
+      if (!controller.signal.aborted) setContactError(describeError(err, 'Não foi possível salvar seus dados.'))
+    } finally {
+      if (contactSubmission.current === controller) {
+        contactSubmission.current = null
+        setContactLoading(false)
+      }
+    }
   }
 
   /** Para onde o botão "voltar" leva, em cada etapa. */
@@ -888,7 +969,7 @@ export default function Schedule() {
    */
   const submission = useRef(false)
   async function handleConfirm() {
-    if (submission.current || !service || !date || !slot) return
+    if (submission.current || !contact || !service || !date || !slot) return
     submission.current = true
 
     const dateISO = format(date, 'yyyy-MM-dd')
@@ -896,8 +977,7 @@ export default function Schedule() {
     setError(null)
     try {
       const created = await requestBooking({
-        phone,
-        fullName: fullName.trim(),
+        contactHandle: contact.contactHandle,
         serviceId: service.id,
         date: dateISO,
         startsAt: slot.startsAtClock,
@@ -909,6 +989,12 @@ export default function Schedule() {
       setStep('success')
     } catch (err) {
       setError(describeError(err, 'Não foi possível enviar sua solicitação.'))
+      if (err instanceof ApiError && err.code === "CONTACT_HANDLE_INVALID") {
+        invalidateContact()
+        setContactError(err.message)
+        setStep("phone")
+        return
+      }
       // Conflito: alguém pegou antes. Volta para a lista já atualizada.
       if (err instanceof ApiError && err.status === 409) {
         setSlot(null)
@@ -921,6 +1007,7 @@ export default function Schedule() {
   }
 
   function restart() {
+    invalidateContact()
     setPhone('')
     setFullName('')
     clearBookingIntent()
@@ -978,12 +1065,14 @@ export default function Schedule() {
       )}
 
       {step === 'phone' && (
-        <PhoneStep
+        <ContactStep
           phone={phone}
           fullName={fullName}
-          onChangePhone={setPhone}
-          onChangeName={setFullName}
-          onContinue={() => { setNotice(null); setStep(slot && service && date ? 'confirm' : 'service') }}
+          onChangePhone={value => { invalidateContact(); setPhone(value) }}
+          onChangeName={value => { invalidateContact(); setFullName(value) }}
+          onContinue={() => void submitContact()}
+          loading={contactLoading}
+          error={contactError}
         />
       )}
       {step === 'service' && (
@@ -1027,13 +1116,13 @@ export default function Schedule() {
           onBack={() => goBack('time')}
         />
       )}
-      {step === 'confirm' && service && date && slot && (
+      {step === 'confirm' && service && date && slot && contact && (
         <ConfirmStep
           service={service}
           date={date}
           slot={slot}
-          fullName={fullName}
-          phone={phone}
+          fullName={contact.fullName}
+          phoneMasked={contact.phoneMasked}
           onConfirm={handleConfirm}
           onBack={() => goBack('confirm')}
           onEditContact={() => setStep('phone')}

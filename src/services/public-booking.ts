@@ -10,8 +10,8 @@ import type { Appointment } from "./booking"
  */
 
 export interface BookingRequestPayload {
-  phone: string
-  fullName: string
+  /** Handle da etapa de cadastro. Nome e telefone não trafegam de novo. */
+  contactHandle: string
   serviceId: string
   date: string
   startsAt: string
@@ -98,4 +98,31 @@ export interface BookingPolicy {
  */
 export async function getBookingPolicy(): Promise<BookingPolicy> {
   return apiRequest<BookingPolicy>("/booking/policy", { skipRefresh: true })
+}
+
+export interface ContactRegistration {
+  /** Handle de uso restrito devolvido pelo cadastro. Não é sessão. */
+  contactHandle: string
+  fullName: string
+  /** "(71) *****-6090" — o servidor nunca devolve o número inteiro. */
+  phoneMasked: string
+}
+
+/**
+ * Etapa de cadastro: valida e grava o contato antes de qualquer seleção.
+ *
+ * Não cria senha, sessão nem token de acesso. O handle devolvido autoriza
+ * apenas abrir uma solicitação para aquele contato.
+ */
+export async function registerContact(
+  fullName: string,
+  phone: string,
+  options: { previousHandle?: string; signal?: AbortSignal } = {},
+): Promise<ContactRegistration> {
+  return apiRequest<ContactRegistration>("/booking/contacts", {
+    method: "POST",
+    body: { fullName, phone, ...(options.previousHandle ? { previousHandle: options.previousHandle } : {}) },
+    signal: options.signal,
+    skipRefresh: true,
+  })
 }

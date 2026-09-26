@@ -32,6 +32,15 @@ async function setup(page: Page) {
   })
   await page.route('**/api/auth/refresh', route => ok(route, { accessToken: 'browser-test-only' }))
   await page.route('**/api/auth/me', route => ok(route, { user: { id: 'test', role: 'ADMIN', status: 'ACTIVE', fullName: 'Teste', phone: '11999999999' } }))
+  await page.route('**/api/booking/contacts', route => {
+    const body = route.request().postDataJSON()
+    const digits = String(body.phone).replace(/[^0-9]/g, '')
+    return route.fulfill({ status: 201, json: { success: true, data: {
+      contactHandle: 'v1.contact.9999999999999.sig',
+      fullName: body.fullName,
+      phoneMasked: '(' + digits.slice(0, 2) + ') *****-' + digits.slice(-4),
+    } } })
+  })
   await page.route('**/api/booking/policy', route => ok(route, { requiresApproval: true, baseSlotMinutes: 40, pendingTtlMinutes: 120, minimumAdvanceMinutes: 60 }))
   await page.route('**/api/booking/services', route => ok(route, { services: [service30, service50] }))
   await page.route('**/api/booking/business-hours', route => ok(route, { days: Array.from({ length: 7 }, (_, weekday) => ({ weekday, closed: false, opensAt: '09:00', closesAt: '20:00', breakStartsAt: '12:00', breakEndsAt: '14:00' })) }))
@@ -40,8 +49,8 @@ async function open(page: Page, screen: string) {
   await page.goto('/tests/browser/fixture.html?page=' + screen)
 }
 async function fillContact(page: Page) {
+  await page.getByLabel('Nome completo').fill('Cliente QA')
   await page.getByLabel('WhatsApp').fill('71988881234')
-  await page.getByLabel('Seu nome').fill('Cliente QA')
   await page.getByRole('button', { name: 'Continuar', exact: true }).click()
 }
 async function chooseService(page: Page, name = 'Corte') {
@@ -183,7 +192,7 @@ test.describe('current booking components in Chromium', () => {
       await page.setViewportSize({ width, height: 900 })
       await page.route('**/api/booking/availability?**', route => ok(route, { slots: [slot('09:00', 50), slot('14:00', 50), slot('18:00', 50)], reason: null }))
       await open(page, 'schedule')
-      await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Vamos começar?' })).toBeVisible()
       await noOverflow(page); await touchTargets(page)
       await fillContact(page)
       await expect(page.getByRole('button', { name: /Cabelo/ })).toBeVisible()
@@ -282,7 +291,7 @@ test.describe('fluxo público de agendamento', () => {
     })
 
     await open(page, 'schedule')
-    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Vamos começar?' })).toBeVisible()
     // Nenhum campo de senha em lugar nenhum do fluxo.
     expect(await page.locator('input[type=password]').count()).toBe(0)
 
@@ -301,8 +310,10 @@ test.describe('fluxo público de agendamento', () => {
 
     // Enviou só o necessário — nada de duração, preço ou status.
     await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
-    expect(Object.keys(sent).sort()).toEqual(['date', 'fullName', 'phone', 'serviceId', 'startsAt'])
-    expect(sent.phone).toBe('(71) 98888-1234')
+    expect(Object.keys(sent).sort()).toEqual(['contactHandle', 'date', 'serviceId', 'startsAt'])
+    // Dado pessoal não trafega de novo: o handle identifica o contato.
+    expect(JSON.stringify(sent)).not.toContain('98888')
+    expect(JSON.stringify(sent)).not.toContain('Cliente QA')
     // Não diz "confirmado" enquanto depende do barbeiro.
     await expect(page.getByText('Agendamento confirmado!')).toHaveCount(0)
     await expect(page.getByText('Ainda não está confirmado')).toBeVisible()
@@ -322,7 +333,7 @@ test.describe('fluxo público de agendamento', () => {
     await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Começar novo agendamento' }).click()
-    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Vamos começar?' })).toBeVisible()
     expect(await page.evaluate(() => sessionStorage.getItem('ec.booking.intent'))).toBeNull()
 
     // E o fluxo novo anda normalmente: serviço, data e horário livres.
@@ -343,7 +354,7 @@ test.describe('fluxo público de agendamento', () => {
     await open(page, 'schedule')
     await page.getByRole('button', { name: 'Continuar agendamento' }).click()
     // Volta pelo contato — o telefone nunca é guardado no navegador.
-    await expect(page.getByRole('heading', { name: 'Vamos agendar seu horário?' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Vamos começar?' })).toBeVisible()
     await fillContact(page)
     await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toBeVisible()
 
@@ -430,7 +441,7 @@ test('back navigation changes contact, service, date and time without stale subm
   await page.getByRole('button', { name: 'Continuar', exact: true }).click()
   for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
   await page.getByLabel('WhatsApp').fill('71977771234')
-  await page.getByLabel('Seu nome').fill('Novo contato QA')
+  await page.getByLabel('Nome completo').fill('Novo contato QA')
   await page.getByRole('button', { name: 'Continuar', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Revisar solicitação' })).toBeVisible()
   for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Voltar à etapa anterior' }).click()
@@ -440,7 +451,7 @@ test('back navigation changes contact, service, date and time without stale subm
   await page.getByRole('button', { name: '09:40', exact: true }).click()
   await page.getByRole('button', { name: 'Continuar', exact: true }).click()
   await expect(page.getByText('Novo contato QA', { exact: true })).toBeVisible()
-  await expect(page.getByText('(71) 97777-1234', { exact: true })).toBeVisible()
+  await expect(page.getByText('(71) *****-1234', { exact: true })).toBeVisible()
   await expect(page.getByText('Cabelo + Barba + Pigmentação', { exact: true })).toBeVisible()
   await expect(page.getByText('50 minutos', { exact: true })).toBeVisible()
 })

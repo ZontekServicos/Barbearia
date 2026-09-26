@@ -7,16 +7,19 @@ import {
   availabilityQuerySchema,
   createAppointmentSchema,
   listMyAppointmentsQuerySchema,
+  createContactSchema,
   publicBookingRequestSchema,
   publicTokenParamSchema,
   uuidParamSchema,
 } from "./booking.schemas.js"
 import {
   publicBookingRateLimit,
+  publicContactRateLimit,
   publicRequestLookupRateLimit,
 } from "../../middlewares/rate-limit.js"
 import {
   getPublicRequest,
+  registerPublicContact,
   requestPublicAppointment,
 } from "./public-booking.service.js"
 import { BookingRules } from "./booking.rules.js"
@@ -29,6 +32,8 @@ import {
   listMyAppointments,
 } from "./appointments.service.js"
 import { listBusinessHours } from "./schedule.service.js"
+
+import { enforcePublicIpQuota } from "./public-quota.js"
 
 export const bookingRouter = Router()
 
@@ -133,9 +138,9 @@ bookingRouter.post(
   validate({ body: publicBookingRequestSchema }),
   async (req, res) => {
     const body = req.body as z.infer<typeof publicBookingRequestSchema>
+    await enforcePublicIpQuota("requests", req.ip ?? "unknown")
     const result = await requestPublicAppointment({
-      phone: body.phone,
-      fullName: body.fullName,
+      contactHandle: body.contactHandle,
       serviceId: body.serviceId,
       date: body.date,
       startsAt: body.startsAt,
@@ -187,3 +192,24 @@ bookingRouter.get("/policy", async (_req, res) => {
     minimumAdvanceMinutes: BookingRules.minimumAdvanceMinutes,
   })
 })
+
+/**
+ * Etapa de cadastro do fluxo público — a PRIMEIRA do agendamento.
+ *
+ * Valida nome e WhatsApp, normaliza para E.164 e grava o contato. Não cria
+ * senha, JWT, refresh token nem sessão; devolve apenas um handle de uso
+ * restrito para as etapas seguintes (ver contact-handle).
+ *
+ * Informar o telefone de outra pessoa não devolve nada dela: o nome que volta
+ * é o que acabou de ser digitado, e o telefone volta mascarado.
+ */
+bookingRouter.post(
+  "/contacts",
+  publicContactRateLimit,
+  validate({ body: createContactSchema }),
+  async (req, res) => {
+    const body = req.body as z.infer<typeof createContactSchema>
+    await enforcePublicIpQuota("contacts", req.ip ?? "unknown")
+    return sendSuccess(res, await registerPublicContact(body), 201)
+  },
+)

@@ -192,9 +192,31 @@ export const updateAppointmentStatusSchema = z.object({
  * `durationMinutes`, `role` — é REJEITADO, não ignorado. Duração, preço, fim e
  * status são decididos pelo servidor a partir do serviço no banco.
  */
-export const publicBookingRequestSchema = z.strictObject({
-  phone: phoneSchema,
+/**
+ * Etapa de cadastro: o que o navegador envia antes de escolher qualquer coisa.
+ *
+ * `strictObject`: `role`, `status`, `password` e afins são rejeitados, não
+ * ignorados. Nada aqui cria credencial.
+ */
+export const createContactSchema = z.strictObject({
+  previousHandle: z.string().max(300).optional(),
   fullName: fullNameSchema,
+  phone: phoneSchema,
+})
+
+/**
+ * Solicitação de agendamento.
+ *
+ * O contato vem pelo handle emitido na etapa de cadastro — nome e telefone não
+ * trafegam de novo. Duração, preço, fim e status continuam sendo decididos
+ * pelo servidor a partir do serviço no banco.
+ */
+export const publicBookingRequestSchema = z.strictObject({
+  contactHandle: z
+    .string()
+    .trim()
+    .min(1, "Informe seus dados novamente.")
+    .max(300),
   serviceId: z.uuid("Serviço inválido."),
   date: shopDateSchema,
   startsAt: clockSchema,

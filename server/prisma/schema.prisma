@@ -44,6 +44,7 @@ model User {
   createdAt       DateTime   @default(now()) @map("created_at")
   updatedAt       DateTime   @updatedAt @map("updated_at")
 
+  contactHandles  PublicContactHandle[]
   refreshTokens   RefreshToken[]
   appointments    Appointment[]
   actionsPerfomed AdminAuditLog[] @relation("AdminActor")
@@ -206,4 +207,25 @@ model AdminAuditLog {
   @@index([actorId, createdAt])
   @@index([targetUserId, createdAt])
   @@map("admin_audit_logs")
+}
+
+/// Capacidade opaca de cadastro: uso único, sem autenticação.
+model PublicContactHandle {
+  tokenHash String @id @map("token_hash") @db.VarChar(64)
+  userId String @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("public_contact_handles")
+}
+
+/// Contadores compartilhados entre réplicas. Chaves pessoais são HMAC.
+model PublicBookingQuota {
+  key String @id @db.VarChar(96)
+  count Int
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@map("public_booking_quotas")
 }

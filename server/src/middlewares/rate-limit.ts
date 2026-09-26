@@ -65,3 +65,14 @@ export const publicRequestLookupRateLimit = rateLimit({
   windowMs: 15 * 60_000,
   limit: 60,
 })
+
+/**
+ * Etapa de cadastro do fluxo público: cada chamada pode criar um contato.
+ * Orçamento próprio, separado do envio da solicitação, para que um não consuma
+ * o do outro.
+ */
+export const publicContactRateLimit = rateLimit({
+  ...sharedOptions,
+  windowMs: 15 * 60_000,
+  limit: 10,
+})

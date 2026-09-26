@@ -91,3 +91,16 @@ export function maskPhone(e164: string): string {
   if (e164.length < 8) return "***"
   return `${e164.slice(0, 5)}****${e164.slice(-4)}`
 }
+
+/**
+ * Máscara para EXIBIÇÃO ao próprio cliente: +5571988886090 -> (71) *****-6090.
+ *
+ * Mostra o bastante para a pessoa reconhecer o número que digitou, sem
+ * reimprimir o telefone inteiro numa tela que pode ser lida por cima do
+ * ombro. Diferente de `maskPhone`, que é para log.
+ */
+export function maskPhoneForDisplay(e164: string): string {
+  const match = /^\+55(\d{2})(\d{5})(\d{4})$/.exec(e164)
+  if (!match) return "(--) *****-****"
+  return `(${match[1]}) *****-${match[3]}`
+}

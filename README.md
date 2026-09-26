@@ -155,10 +155,12 @@ Apenas `fullName` é editável em `/users/me`. O administrador não pode alterar
 O cliente não cria conta para marcar um horário. O fluxo é:
 
 ```
-Landing -> WhatsApp + nome -> serviço -> data -> horário -> revisar -> solicitar
+Landing -> CADASTRO (nome + WhatsApp) -> serviço -> data -> horário -> revisar -> solicitar
 ```
 
-O telefone é pedido logo no começo e basta para iniciar. Não há senha, código por SMS, e-mail, login nem sessão em nenhum ponto do caminho. O telefone informado não comprova titularidade. O fluxo autoriza somente a criação de uma solicitação pendente; identidade e aprovação continuam sendo responsabilidades operacionais da barbearia.
+O cadastro é a PRIMEIRA etapa: nada é escolhido antes de o contato existir. Nome e WhatsApp são validados e gravados ali (`POST /booking/contacts`), então um telefone inválido é recusado na primeira tela — não cinco etapas depois. A resposta traz apenas um *handle* de uso restrito (ver `contact-handle.ts`): não é sessão, não lê nada, e nenhum middleware de autenticação o aceita. As etapas seguintes usam esse handle, então nome e telefone não trafegam de novo.
+
+O telefone basta para iniciar. Não há senha, código por SMS, e-mail, login nem sessão em nenhum ponto do caminho. O telefone informado não comprova titularidade. O fluxo autoriza somente a criação de uma solicitação pendente; identidade e aprovação continuam sendo responsabilidades operacionais da barbearia.
 
 **A administração continua exigindo telefone + senha.** Nenhuma rota `/admin` foi aberta.
 

@@ -77,17 +77,44 @@ async function makeService(durationMinutes = 30) {
 }
 
 /** Corpo válido de solicitação pública. */
-function request(overrides: Record<string, unknown> = {}) {
+/** Etapa de cadastro: grava o contato e devolve o handle das etapas seguintes. */
+async function registerContact(
+  overrides: { phone?: string; fullName?: string } = {},
+) {
+  return call("/booking/contacts", {
+    body: {
+      phone: overrides.phone ?? "(71) 98888-1234",
+      fullName: overrides.fullName ?? "Cliente Público",
+    },
+  })
+}
+
+/**
+ * Corpo válido de solicitação.
+ *
+ * Passa pela etapa de cadastro primeiro — é assim que o fluxo público
+ * funciona agora: nada é escolhido antes de o contato existir.
+ */
+async function request(overrides: Record<string, unknown> = {}) {
+  const { phone, fullName, ...rest } = overrides as {
+    phone?: string
+    fullName?: string
+  }
+  const registered = await registerContact({ phone, fullName })
   return {
-    phone: "(71) 98888-1234",
-    fullName: "Cliente Público",
+    contactHandle: registered.body?.data?.contactHandle,
     date: nextTuesday(),
     startsAt: "09:00",
-    ...overrides,
+    ...rest,
   }
 }
 
 async function cleanup() {
+  // Quotas e handles são DURÁVEIS: vivem no banco para valer entre réplicas.
+  // Sem limpá-los, um teste que esgota o orçamento por IP faz todos os
+  // seguintes receberem 429 — e a suíte passa a depender da ordem.
+  await prisma.publicBookingQuota.deleteMany()
+  await prisma.publicContactHandle.deleteMany()
   await prisma.adminAuditLog.deleteMany()
   await prisma.appointment.deleteMany()
   await prisma.scheduleBlock.deleteMany()
@@ -123,10 +150,37 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     for (const limiter of [
       limits.globalRateLimit,
       limits.publicBookingRateLimit,
+      limits.publicContactRateLimit,
       limits.publicRequestLookupRateLimit,
       limits.loginRateLimit,
     ])
       limiter.resetKey("127.0.0.1")
+  })
+
+  it("audit: contact handle never discloses the account identifier", async () => {
+    const r=await registerContact()
+    const user=await prisma.user.findFirstOrThrow()
+    assert.ok(!r.body.data.contactHandle.includes(user.id))
+  })
+
+  it("audit: successful handle is consumed even after the appointment is rejected", async () => {
+    const service=await makeService()
+    const payload=await request({serviceId:service.id})
+    const first=await call("/booking/requests",{body:payload})
+    assert.equal(first.status,201)
+    await prisma.appointment.update({where:{id:first.body.data.appointment.id},data:{status:"REJECTED"}})
+    const replay=await call("/booking/requests",{body:{...payload,startsAt:"09:40"}})
+    assert.equal(replay.status,400)
+    assert.equal(await prisma.appointment.count(),1)
+  })
+
+  it("audit: contact IP quota persists when process memory is reset", async () => {
+    for(let i=0;i<11;i++){
+      limits.publicContactRateLimit.resetKey("127.0.0.1")
+      const r=await registerContact({phone:phone()})
+      assert.equal(r.status,i<10?201:429)
+    }
+    assert.equal(await prisma.user.count(),10)
   })
 
   // ------------------------------------------------------------- fluxo feliz
@@ -134,7 +188,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("cliente novo solicita agendamento informando só WhatsApp e nome", async () => {
     const service = await makeService()
     const response = await call("/booking/requests", {
-      body: request({ serviceId: service.id }),
+      body: await request({ serviceId: service.id }),
     })
 
     assert.equal(response.status, 201)
@@ -164,7 +218,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     })
 
     const response = await call("/booking/requests", {
-      body: request({ serviceId: service.id, fullName: "Nome Diferente" }),
+      body: await request({ serviceId: service.id, fullName: "Nome Diferente" }),
     })
     assert.equal(response.status, 201)
 
@@ -184,7 +238,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       ["+55 71 98888-1234", "10:20"],
     ] as const) {
       const response = await call("/booking/requests", {
-        body: request({ serviceId: service.id, phone: value, date, startsAt }),
+        body: await request({ serviceId: service.id, phone: value, date, startsAt }),
       })
       assert.equal(response.status, 201, value)
     }
@@ -199,7 +253,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     })
 
     assert.equal(
-      (await call("/booking/requests", { body: request({ serviceId: service.id }) })).status,
+      (await call("/booking/requests", { body: await request({ serviceId: service.id }) })).status,
       201,
     )
 
@@ -221,7 +275,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       { date: "2026-02-30" },
     ]) {
       const response = await call("/booking/requests", {
-        body: request({ serviceId: service.id, ...invalid }),
+        body: await request({ serviceId: service.id, ...invalid }),
       })
       assert.ok([400, 409].includes(response.status), JSON.stringify(invalid) + " -> " + response.status)
     }
@@ -242,7 +296,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       { publicToken: "forjado" },
     ]) {
       const response = await call("/booking/requests", {
-        body: request({ serviceId: service.id, ...extra }),
+        body: await request({ serviceId: service.id, ...extra }),
       })
       assert.equal(response.status, 400, JSON.stringify(extra))
     }
@@ -252,7 +306,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("serviço inativo não pode ser solicitado", async () => {
     const service = await makeService()
     await prisma.service.update({ where: { id: service.id }, data: { active: false } })
-    const response = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const response = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
     assert.equal(response.status, 404)
   })
 
@@ -277,7 +331,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     })
 
     const response = await call("/booking/requests", {
-      body: request({ serviceId: service.id }),
+      body: await request({ serviceId: service.id }),
     })
     assert.equal(response.status, 201)
 
@@ -291,10 +345,10 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const service = await makeService()
     const date = nextTuesday()
     const first = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:00" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:00" }),
     })
     const second = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:40", phone: "(71) 97777-4321" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:40", phone: "(71) 97777-4321" }),
     })
 
     const lookup = await call("/booking/requests/" + first.body.data.publicToken)
@@ -312,7 +366,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("telefone não autentica: rotas de sessão e de administração seguem fechadas", async () => {
     const service = await makeService()
-    const created = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const created = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
     assert.equal(created.status, 201)
 
     for (const path of ["/auth/me", "/users/me", "/booking/appointments/me"]) {
@@ -324,7 +378,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("não é possível cancelar a reserva de terceiro com o próprio token", async () => {
     const service = await makeService()
-    const created = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const created = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
     const id = created.body.data.appointment.id
 
     // Sem sessão, nenhuma rota de cancelamento aceita a chamada.
@@ -342,14 +396,14 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("solicitação pendente segura o horário e some da disponibilidade", async () => {
     const service = await makeService()
     const date = nextTuesday()
-    await call("/booking/requests", { body: request({ serviceId: service.id, date, startsAt: "09:00" }) })
+    await call("/booking/requests", { body: await request({ serviceId: service.id, date, startsAt: "09:00" }) })
 
     const result = await availability.getAvailability(date, service.id)
     assert.equal(result.slots.some(slot => slot.startsAtClock === "09:00"), false)
 
     // Outra pessoa pedindo o mesmo horário recebe conflito tratável.
     const rival = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:00", phone: "(71) 97777-9999" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:00", phone: "(71) 97777-9999" }),
     })
     assert.equal(rival.status, 409)
   })
@@ -361,7 +415,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     })
     const session = await tokens.issueSession(adminUser.id)
 
-    const created = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const created = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
     const id = created.body.data.appointment.id
 
     const decided = await call(`/admin/requests/${id}/decide`, {
@@ -389,7 +443,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const session = await tokens.issueSession(adminUser.id)
 
     const created = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:00" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:00" }),
     })
     const id = created.body.data.appointment.id
 
@@ -415,7 +469,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       data: { phone: phone(), fullName: "Cliente", role: "CUSTOMER", status: "ACTIVE" },
     })
     const session = await tokens.issueSession(customer.id)
-    const created = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const created = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
 
     const attempt = await call(`/admin/requests/${created.body.data.appointment.id}/decide`, {
       body: { decision: "CONFIRMED" },
@@ -428,7 +482,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const service = await makeService()
     const date = nextTuesday()
     const created = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:00" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:00" }),
     })
     const id = created.body.data.appointment.id
 
@@ -449,7 +503,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
     // E outra pessoa consegue reservar o horário liberado.
     const rival = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "09:00", phone: "(71) 97777-8888" }),
+      body: await request({ serviceId: service.id, date, startsAt: "09:00", phone: "(71) 97777-8888" }),
     })
     assert.equal(rival.status, 201)
     const expired = await prisma.appointment.findUniqueOrThrow({ where: { id } })
@@ -463,14 +517,14 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const date = nextTuesday()
     for (const startsAt of ["09:00", "09:40", "10:20"]) {
       assert.equal(
-        (await call("/booking/requests", { body: request({ serviceId: service.id, date, startsAt }) }))
+        (await call("/booking/requests", { body: await request({ serviceId: service.id, date, startsAt }) }))
           .status,
         201,
         startsAt,
       )
     }
     const excess = await call("/booking/requests", {
-      body: request({ serviceId: service.id, date, startsAt: "11:00" }),
+      body: await request({ serviceId: service.id, date, startsAt: "11:00" }),
     })
     assert.equal(excess.status, 409)
     assert.doesNotMatch(excess.body.error.message, /3|em aberto|bloquead/i)
@@ -482,7 +536,20 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       data: { phone: "+5571988881234", fullName: "Bloqueado", role: "CUSTOMER", status: "BLOCKED" },
     })
 
-    const response = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    // O cadastro responde como qualquer outro: sinalizar o bloqueio aqui
+    // diria a um estranho que aquele telefone existe e está banido.
+    const registered = await registerContact()
+    assert.equal(registered.status, 201)
+
+    // A recusa vem no envio, com mensagem neutra e sem criar nada.
+    const response = await call("/booking/requests", {
+      body: {
+        contactHandle: registered.body.data.contactHandle,
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+      },
+    })
     assert.equal(response.status, 409)
     assert.doesNotMatch(response.body.error.message, /bloquead/i, "não confirma o bloqueio")
     assert.equal(await prisma.appointment.count(), 0)
@@ -492,8 +559,8 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const service = await makeService()
     const date = nextTuesday()
     const results = await Promise.all([
-      call("/booking/requests", { body: request({ serviceId: service.id, date, startsAt: "09:00" }) }),
-      call("/booking/requests", { body: request({ serviceId: service.id, date, startsAt: "09:40" }) }),
+      call("/booking/requests", { body: await request({ serviceId: service.id, date, startsAt: "09:00" }) }),
+      call("/booking/requests", { body: await request({ serviceId: service.id, date, startsAt: "09:40" }) }),
     ])
     assert.deepEqual(results.map(r => r.status).sort(), [201, 201])
     assert.equal(await prisma.user.count(), 1)
@@ -503,9 +570,9 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const service = await makeService()
     const date = nextTuesday()
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, index) =>
+      Array.from({ length: 10 }, async (_, index) =>
         call("/booking/requests", {
-          body: request({
+          body: await request({
             serviceId: service.id,
             date,
             startsAt: "09:00",
@@ -524,14 +591,14 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("regression: concurrent requests cannot exceed the durable phone quota", async () => {
     const service = await makeService()
-    const responses = await Promise.all(["09:00", "09:40", "10:20", "11:00"].map(startsAt => call("/booking/requests", { body: request({ serviceId: service.id, startsAt }) })))
+    const responses = await Promise.all(["09:00", "09:40", "10:20", "11:00"].map(async startsAt => call("/booking/requests", { body: await request({ serviceId: service.id, startsAt }) })))
     assert.deepEqual(responses.map(r => r.status).sort(), [201, 201, 201, 409])
     assert.equal(await prisma.appointment.count(), 3)
   })
 
   it("regression: an expired request cannot be confirmed", async () => {
     const service = await makeService()
-    const created = await call("/booking/requests", { body: request({ serviceId: service.id }) })
+    const created = await call("/booking/requests", { body: await request({ serviceId: service.id }) })
     const id = created.body.data.appointment.id
     await prisma.appointment.update({where:{id},data:{pendingExpiresAt:new Date(Date.now()-1000)}})
     const admin = await prisma.user.create({data:{phone:phone(),role:"ADMIN",status:"ACTIVE"}})
@@ -551,7 +618,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("regression: concurrent opposing decisions have exactly one winner and one audit", async () => {
     const service = await makeService()
-    const created = await call("/booking/requests", {body:request({serviceId:service.id})})
+    const created = await call("/booking/requests", {body: await request({serviceId:service.id})})
     const id=created.body.data.appointment.id
     const admin=await prisma.user.create({data:{phone:phone(),role:"ADMIN",status:"ACTIVE"}})
     const session=await tokens.issueSession(admin.id)
@@ -561,7 +628,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("regression: public token is stored only as a digest and never logged on error", async () => {
     const service=await makeService()
-    const created=await call("/booking/requests",{body:request({serviceId:service.id})})
+    const created=await call("/booking/requests",{body: await request({serviceId:service.id})})
     const token=created.body.data.publicToken
     const row=await prisma.appointment.findUniqueOrThrow({where:{id:created.body.data.appointment.id}})
     assert.notEqual(row.publicToken,token)
@@ -576,12 +643,29 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     } finally {prisma.appointment.findUnique=original;console.error=originalLog}
   })
   it("all public mass assignment fields are rejected, never silently stripped", async () => {
-    const service=await makeService()
-    for (const key of ["userId","customerId","role","status","servicePriceCents","durationMinutes","reservedMinutes","reservedEndsAt","publicToken","decidedAt","pendingExpiresAt"]) {
+    const service = await makeService()
+    // Um cadastro legítimo, cujo handle é reutilizado em todas as tentativas —
+    // assim o teste isola a injeção de campos, sem misturar a etapa anterior.
+    const registered = await registerContact()
+    assert.equal(registered.status, 201)
+    const handle = registered.body.data.contactHandle
+
+    for (const key of ["userId","customerId","role","status","servicePriceCents","durationMinutes","reservedMinutes","reservedEndsAt","publicToken","decidedAt","pendingExpiresAt","phone","fullName"]) {
       limits.publicBookingRateLimit.resetKey("127.0.0.1")
-      assert.equal((await call("/booking/requests",{body:request({serviceId:service.id,[key]:"injected"})})).status,400,key)
+      const response = await call("/booking/requests", {
+        body: {
+          contactHandle: handle,
+          serviceId: service.id,
+          date: nextTuesday(),
+          startsAt: "09:00",
+          [key]: "injected",
+        },
+      })
+      assert.equal(response.status, 400, key)
     }
-    assert.equal(await prisma.appointment.count(),0);assert.equal(await prisma.user.count(),0)
+    // Nenhuma reserva criada; o contato do cadastro legítimo permanece único.
+    assert.equal(await prisma.appointment.count(), 0)
+    assert.equal(await prisma.user.count(), 1)
   })
 
   it("phone-only login fails; ADMIN and password CUSTOMER retain normal auth; blocked and unknown fail", async () => {
@@ -604,7 +688,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
       const user=await prisma.user.create({data:{phone:phone(),fullName:role==="ADMIN"?null:"João",role,status:"ACTIVE",passwordHash:hash,passwordUpdatedAt:new Date(),failedLoginAttempts:4,lockedUntil:new Date(Date.now()+10000)}})
       await tokens.issueSession(user.id)
       const sessions=await prisma.refreshToken.findMany({where:{userId:user.id}})
-      const r=await call("/booking/requests",{body:request({phone:user.phone,fullName:"Maria",serviceId:service.id,startsAt})})
+      const r=await call("/booking/requests",{body: await request({phone:user.phone,fullName:"Maria",serviceId:service.id,startsAt})})
       assert.equal(r.status,201);assert.equal(r.headers.get("set-cookie"),null)
       assert.deepEqual(await prisma.user.findUniqueOrThrow({where:{id:user.id}}),user)
       assert.deepEqual(await prisma.refreshToken.findMany({where:{userId:user.id}}),sessions)
@@ -614,7 +698,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   it("tokens are exact, unique, read-only, absent from admin lists, and never authenticate", async () => {
     const service=await makeService()
-    const r=await call("/booking/requests",{body:request({serviceId:service.id})})
+    const r=await call("/booking/requests",{body: await request({serviceId:service.id})})
     const token=r.body.data.publicToken,id=r.body.data.appointment.id
     for(const value of [token.slice(0,-1),"invalid","x".repeat(44)])assert.equal((await call("/booking/requests/"+value)).status,400)
     assert.equal((await call("/booking/requests/"+randomBytes(32).toString("base64url"))).status,404)
@@ -637,22 +721,22 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("expired/rejected requests release quota and reads do not mutate expiration", async () => {
     const service=await makeService()
     const records=[]
-    for(const startsAt of ["09:00","09:40","10:20"])records.push((await call("/booking/requests",{body:request({serviceId:service.id,startsAt})})).body.data)
+    for(const startsAt of ["09:00","09:40","10:20"])records.push((await call("/booking/requests",{body: await request({serviceId:service.id,startsAt})})).body.data)
     await prisma.appointment.update({where:{id:records[0].appointment.id},data:{pendingExpiresAt:new Date(Date.now()-1000)}})
     await prisma.appointment.update({where:{id:records[1].appointment.id},data:{status:"REJECTED"}})
     const before=await prisma.appointment.findMany({orderBy:{id:"asc"}})
     await availability.getAvailability(nextTuesday(),service.id)
     await call("/booking/requests/"+records[0].publicToken)
     assert.deepEqual(await prisma.appointment.findMany({orderBy:{id:"asc"}}),before)
-    assert.equal((await call("/booking/requests",{body:request({serviceId:service.id,startsAt:"11:00"})})).status,201)
+    assert.equal((await call("/booking/requests",{body: await request({serviceId:service.id,startsAt:"11:00"})})).status,201)
   })
 
   it("expiry versus admin confirmation versus replacement never resurrects the old request", async () => {
     const service=await makeService()
-    const r=await call("/booking/requests",{body:request({serviceId:service.id})});const id=r.body.data.appointment.id
+    const r=await call("/booking/requests",{body: await request({serviceId:service.id})});const id=r.body.data.appointment.id
     await prisma.appointment.update({where:{id},data:{pendingExpiresAt:new Date(Date.now()-1000)}})
     const admin=await prisma.user.create({data:{phone:phone(),role:"ADMIN",status:"ACTIVE"}});const session=await tokens.issueSession(admin.id)
-    const result=await Promise.all([call("/admin/requests/"+id+"/decide",{access:session.accessToken,body:{decision:"CONFIRMED"}}),call("/booking/requests",{body:request({serviceId:service.id,phone:phone()})})])
+    const result=await Promise.all([call("/admin/requests/"+id+"/decide",{access:session.accessToken,body:{decision:"CONFIRMED"}}),call("/booking/requests",{body: await request({serviceId:service.id,phone:phone()})})])
     assert.deepEqual(result.map(r=>r.status),[409,201]);assert.equal((await prisma.appointment.findUniqueOrThrow({where:{id}})).status,"EXPIRED")
   })
 
@@ -668,7 +752,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const displayed=new Set(shown.slots.map(s=>Number(s.startsAtClock.slice(0,2))*60+Number(s.startsAtClock.slice(3))))
     const omitted=full.find(n=>!displayed.has(n))!
     const startsAt=String(Math.floor(omitted/60)).padStart(2,"0")+":"+String(omitted%60).padStart(2,"0")
-    const created=await call("/booking/requests",{body:request({serviceId:service.id,startsAt})});assert.equal(created.status,201)
+    const created=await call("/booking/requests",{body: await request({serviceId:service.id,startsAt})});assert.equal(created.status,201)
     const before=await prisma.appointment.findUniqueOrThrow({where:{id:created.body.data.appointment.id}})
     await prisma.service.update({where:{id:service.id},data:{durationMinutes:50,priceCents:9999}})
     assert.deepEqual(await prisma.appointment.findUniqueOrThrow({where:{id:before.id}}),before)
@@ -678,8 +762,13 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("repeated simultaneous booking races return exactly one success and all other responses 409", async () => {
     const service=await makeService()
     for(const count of [2,10,10,10,10,10]){
-      await prisma.appointment.deleteMany();limits.publicBookingRateLimit.resetKey("127.0.0.1")
-      const r=await Promise.all(Array.from({length:count},()=>call("/booking/requests",{body:request({phone:phone(),serviceId:service.id})})))
+      await prisma.appointment.deleteMany()
+      // Contadores duráveis vivem no banco; zerar só os de memória deixaria
+      // a etapa de cadastro estourando 429 no meio da corrida.
+      await prisma.publicBookingQuota.deleteMany()
+      await prisma.publicContactHandle.deleteMany()
+      limits.publicBookingRateLimit.resetKey("127.0.0.1");limits.publicContactRateLimit.resetKey("127.0.0.1")
+      const r=await Promise.all(Array.from({length:count},async()=>call("/booking/requests",{body: await request({phone:phone(),serviceId:service.id})})))
       assert.equal(r.filter(x=>x.status===201).length,1)
       assert.equal(r.filter(x=>x.status===409).length,count-1,JSON.stringify(r.map(x=>x.status)))
     }
@@ -699,17 +788,28 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     let shape: string | undefined
     const timings: Record<string,number[]>={}
     for(let round=0;round<8;round++) for(const c of cases){
-      limits.publicBookingRateLimit.resetKey("127.0.0.1")
+      limits.publicBookingRateLimit.resetKey("127.0.0.1");limits.publicContactRateLimit.resetKey("127.0.0.1")
+      // O assunto aqui é PARIDADE de resposta, não limite de uso — este tem
+      // teste próprio. Sem zerar a quota durável, a 11a rodada viraria 429 e
+      // mascararia a comparação.
+      await prisma.publicBookingQuota.deleteMany()
       if(c.kind === "NEW") c.phone=phone()
       const began=performance.now()
-      const result=await call("/booking/requests",{body:request({serviceId:service.id,phone:c.phone})})
+      // A etapa de cadastro é onde a enumeração seria possível: é ela que
+      // consulta o telefone. Contato novo, cliente existente e ADMIN precisam
+      // responder igual; bloqueado recusa sem dizer por quê.
+      const result=await call("/booking/contacts",{body:{phone:c.phone,fullName:"Pessoa QA"}})
       ;(timings[c.kind] ??= []).push(performance.now()-began)
-      assert.equal(result.status,c.kind === "BLOCKED" ? 409 : 201)
-      assert.doesNotMatch(JSON.stringify(result.body),/passwordHash|passwordUpdatedAt|lockedUntil|failedLoginAttempts|CUSTOMER|ADMIN|BLOCKED/)
-      if(result.status === 201){
-        const keys=JSON.stringify([Object.keys(result.body.data).sort(),Object.keys(result.body.data.appointment).sort()])
+      // Inclusive o bloqueado: nenhuma diferença observável nesta etapa.
+      assert.equal(result.status,201, c.kind)
+      assert.doesNotMatch(JSON.stringify(result.body),/passwordHash|passwordUpdatedAt|lockedUntil|failedLoginAttempts|CUSTOMER|ADMIN|BLOCKED|Existing/)
+      {
+        const keys=JSON.stringify(Object.keys(result.body.data).sort())
         shape ??= keys
-        assert.equal(keys,shape)
+        assert.equal(keys,shape,c.kind)
+        // O nome devolvido é o que a pessoa digitou, nunca o cadastrado.
+        assert.equal(result.body.data.fullName,"Pessoa QA")
+        assert.match(result.body.data.phoneMasked,/^\(\d{2}\) \*{5}-\d{4}$/)
       }
       await prisma.appointment.deleteMany()
     }
@@ -722,5 +822,169 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     assert.equal(response.body.data.requiresApproval, rules.publicRequestsRequireApproval)
     assert.equal(response.body.data.baseSlotMinutes, rules.baseSlotMinutes)
     assert.equal(response.body.data.pendingTtlMinutes, rules.pendingRequestTtlMinutes)
+  })
+  // -------------------------------------------------------------------------
+  // Etapa de cadastro — a primeira do fluxo
+  // -------------------------------------------------------------------------
+
+  it("cadastro válido grava o contato e devolve handle, sem senha nem sessão", async () => {
+    const response = await registerContact({ fullName: "Guilherme Santana" })
+
+    assert.equal(response.status, 201)
+    const { contactHandle, fullName, phoneMasked } = response.body.data
+    assert.equal(fullName, "Guilherme Santana")
+    assert.equal(phoneMasked, "(71) *****-1234")
+    assert.match(contactHandle, /^v2\.[A-Za-z0-9_-]{43}\.[0-9]{13}\.[A-Za-z0-9_-]{43}$/)
+
+    // Nada de credencial: sem token de acesso, sem cookie, sem refresh.
+    assert.equal(response.body.data.accessToken, undefined)
+    assert.doesNotMatch(JSON.stringify(response.body), /accessToken|refreshToken|password/i)
+    assert.equal(await prisma.refreshToken.count(), 0)
+
+    const contact = await prisma.user.findUniqueOrThrow({ where: { phone: "+5571988881234" } })
+    assert.equal(contact.passwordHash, null)
+    assert.equal(contact.role, "CUSTOMER")
+    assert.equal(contact.status, "PENDING")
+  })
+
+  it("cadastro recusa nome e telefone inválidos antes de qualquer escolha", async () => {
+    for (const invalid of [
+      { fullName: "" },
+      { fullName: "   " },
+      { fullName: "A" },
+      { phone: "123" },
+      { phone: "(71) 3333-3333" },
+      { phone: "(00) 99999-9999" },
+    ]) {
+      const response = await registerContact(invalid)
+      assert.equal(response.status, 400, JSON.stringify(invalid))
+    }
+    assert.equal(await prisma.user.count(), 0)
+  })
+
+  it("cadastro não aceita papel, status nem senha vindos do navegador", async () => {
+    for (const extra of [
+      { role: "ADMIN" },
+      { status: "ACTIVE" },
+      { password: "qualquer-coisa" },
+      { passwordHash: "$argon2id$forjado" },
+    ]) {
+      const response = await call("/booking/contacts", {
+        body: { fullName: "Cliente", phone: "(71) 98888-1234", ...extra },
+      })
+      assert.equal(response.status, 400, JSON.stringify(extra))
+    }
+    assert.equal(await prisma.user.count(), 0)
+  })
+
+  it("cadastro repetido do mesmo telefone reutiliza o contato e preserva o nome", async () => {
+    const first = await registerContact({ fullName: "Nome Original" })
+    assert.equal(first.status, 201)
+
+    const again = await registerContact({ fullName: "Nome Diferente", phone: "71988881234" })
+    assert.equal(again.status, 201)
+
+    assert.equal(await prisma.user.count(), 1, "formato diferente não duplica contato")
+    const stored = await prisma.user.findUniqueOrThrow({ where: { phone: "+5571988881234" } })
+    assert.equal(stored.fullName, "Nome Original", "nome existente não é sobrescrito")
+  })
+
+  it("cadastro com telefone de ADMIN não rebaixa a conta nem revela que ela existe", async () => {
+    const admin = await prisma.user.create({
+      data: {
+        phone: "+5571988881234",
+        fullName: "Erick",
+        role: "ADMIN",
+        status: "ACTIVE",
+        passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$abc$def",
+      },
+    })
+
+    const response = await registerContact({ fullName: "Impostor" })
+    assert.equal(response.status, 201)
+    assert.doesNotMatch(JSON.stringify(response.body), /Erick|ADMIN/)
+
+    const after = await prisma.user.findUniqueOrThrow({ where: { id: admin.id } })
+    assert.equal(after.role, "ADMIN")
+    assert.equal(after.status, "ACTIVE")
+    assert.equal(after.fullName, "Erick")
+    assert.equal(after.passwordHash, admin.passwordHash, "credencial intacta")
+  })
+
+  it("handle adulterado, de outro segredo ou vencido é recusado", async () => {
+    const service = await makeService()
+    const registered = await registerContact()
+    const handle: string = registered.body.data.contactHandle
+    const [prefix, userId, expiry, signature] = handle.split(".")
+
+    const body = (contactHandle: string) => ({
+      contactHandle,
+      serviceId: service.id,
+      date: nextTuesday(),
+      startsAt: "09:00",
+    })
+
+    for (const forged of [
+      "lixo",
+      handle.slice(0, -1),
+      `${prefix}.${userId}.${expiry}.${"a".repeat(signature!.length)}`,
+      // Prazo estendido na mão: a assinatura deixa de bater.
+      `${prefix}.${userId}.${Number(expiry) + 60_000}.${signature}`,
+      // Outro contato, com a assinatura deste.
+      `${prefix}.${randomBytes(16).toString("hex")}.${expiry}.${signature}`,
+      // Já vencido.
+      `${prefix}.${userId}.1.${signature}`,
+    ]) {
+      const response = await call("/booking/requests", { body: body(forged) })
+      assert.equal(response.status, 400, forged.slice(0, 24))
+      assert.doesNotMatch(response.body.error.message, /assinatura|token|handle/i)
+    }
+    assert.equal(await prisma.appointment.count(), 0)
+
+    // O handle legítimo continua funcionando.
+    assert.equal((await call("/booking/requests", { body: body(handle) })).status, 201)
+  })
+
+  it("o handle não autentica nada: nenhuma rota protegida o aceita", async () => {
+    const registered = await registerContact()
+    const handle = registered.body.data.contactHandle
+
+    for (const path of ["/auth/me", "/users/me", "/admin/users", "/booking/appointments/me"]) {
+      assert.equal((await call(path, { access: handle })).status, 401, path)
+    }
+    assert.equal(await prisma.refreshToken.count(), 0, "nenhuma sessão foi criada")
+  })
+
+  it("fluxo completo: cadastro, serviço, data, horário e solicitação PENDING", async () => {
+    const service = await makeService()
+    const date = nextTuesday()
+
+    const registered = await registerContact({ fullName: "Guilherme Santana" })
+    assert.equal(registered.status, 201)
+
+    // Com o contato pronto, catálogo e disponibilidade são consultáveis.
+    assert.equal((await call("/booking/services")).status, 200)
+    const slots = await call(`/booking/availability?date=${date}&serviceId=${service.id}`)
+    assert.equal(slots.status, 200)
+    const chosen = slots.body.data.slots[0].startsAtClock
+
+    const created = await call("/booking/requests", {
+      body: {
+        contactHandle: registered.body.data.contactHandle,
+        serviceId: service.id,
+        date,
+        startsAt: chosen,
+      },
+    })
+    assert.equal(created.status, 201)
+    assert.equal(created.body.data.appointment.status, "PENDING")
+    assert.equal(created.body.data.awaitingApproval, true)
+
+    // O horário sai da disponibilidade imediatamente.
+    const after = await call(`/booking/availability?date=${date}&serviceId=${service.id}`)
+    assert.equal(after.body.data.slots.some((slot: { startsAtClock: string }) => slot.startsAtClock === chosen), false)
+
+    // E em nenhum momento houve sessão de cliente.
+    assert.equal(await prisma.refreshToken.count(), 0)
   })
 })
