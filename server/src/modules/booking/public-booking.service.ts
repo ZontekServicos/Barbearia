@@ -11,7 +11,12 @@ import { CONTACT_HANDLE_TTL_MS, invalidContactHandle, issueContactHandle, readCo
 import { takeContactRegistrationQuota } from "./public-quota.js"
 import { maskPhoneForDisplay } from "../../utils/phone.js"
 import { toPublicPayment, type PublicPayment } from "../payment/payment.service.js"
-import { buildNewRequestLink, buildPaymentHelpLink, buildWhatsappLink } from "./whatsapp.js"
+import {
+  buildNewRequestLink,
+  buildPaymentHelpLink,
+  buildPixPaidLink,
+  buildWhatsappLink,
+} from "./whatsapp.js"
 import { buildPixPresentation, type PixPresentation } from "../payment/pix/pix.service.js"
 
 /**
@@ -87,6 +92,16 @@ export interface PublicRequestView {
    * só existiria no instante seguinte à criação.
    */
   notifyUrl: string | null
+  /**
+   * "Já fiz o Pix": o cliente avisa que pagou e pede a conferência.
+   *
+   * Só no Pix ESTÁTICO. Numa cobrança de provedor a confirmação chega sozinha
+   * por webhook, e oferecer este botão ali convidaria a pessoa a cobrar atenção
+   * humana para algo que já está automatizado.
+   *
+   * É comunicação e nada mais: abrir não muda estado nenhum.
+   */
+  pixPaidUrl: string | null
 }
 
 export interface BookingRequestResult {
@@ -335,8 +350,11 @@ export async function getPublicRequest(
   // estados com prazo — aguardando o barbeiro e aguardando o pagamento.
   const lapsed =
     (appointment.status === "PENDING" || appointment.status === "AWAITING_PAYMENT") &&
-    appointment.pendingExpiresAt !== null &&
-    appointment.pendingExpiresAt.getTime() <= now.getTime()
+    ((appointment.pendingExpiresAt !== null &&
+      appointment.pendingExpiresAt.getTime() <= now.getTime()) ||
+      (appointment.status === "AWAITING_PAYMENT" &&
+        appointment.payment !== null &&
+        appointment.payment.expiresAt.getTime() <= now.getTime()))
 
   const view = toPublicAppointment(lapsed ? { ...appointment, status: "EXPIRED" } : appointment)
   const paid = appointment.payment?.status === "PAID"
@@ -359,6 +377,13 @@ export async function getPublicRequest(
    */
   const awaitingPayment =
     view.status === "AWAITING_PAYMENT" && appointment.payment?.status === "PENDING" && !lapsed
+
+  // Calculada uma vez: a tela e o botão "já fiz o Pix" dependem da MESMA
+  // apresentação, então derivar duas vezes abriria espaço para divergirem.
+  const pixPresentation =
+    awaitingPayment && appointment.payment
+      ? await buildPixPresentation(appointment.payment, appointment.publicReference)
+      : null
 
   return {
     appointment: view,
@@ -385,11 +410,25 @@ export async function getPublicRequest(
               : {}),
           })
         : null,
-    pix:
-      awaitingPayment && appointment.payment
-        ? await buildPixPresentation(appointment.payment, appointment.publicReference)
-        : null,
+    pix: pixPresentation,
     paymentHelpUrl: awaitingPayment && whatsappData ? buildPaymentHelpLink(whatsappData) : null,
+    /**
+     * Depende de `pix` ter saído como estático: assim o botão existe exatamente
+     * quando existe um QR da barbearia na tela para a pessoa ter pagado. Prazo
+     * vencido zera `pix`, e com ele este link — reserva expirada não deve
+     * receber pagamento nem pedido de conferência.
+     */
+    pixPaidUrl:
+      pixPresentation?.requiresManualConfirmation && whatsappData
+        ? buildPixPaidLink({
+            ...whatsappData,
+            endsAtClock: view.endsAtClock,
+            ...(appointment.payment
+              ? { amountFormatted: toPublicPayment(appointment.payment, now).amountFormatted }
+              : {}),
+            ...(appointment.user.fullName ? { customerName: appointment.user.fullName } : {}),
+          })
+        : null,
     notifyUrl:
       view.status === "PENDING" && whatsappData
         ? buildNewRequestLink({

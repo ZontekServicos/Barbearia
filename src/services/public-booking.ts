@@ -110,6 +110,13 @@ export interface BookingRequestView {
   paymentHelpUrl: string | null
   /** "Avisar a barbearia" enquanto a solicitação aguarda análise. */
   notifyUrl: string | null
+  /**
+   * "Já fiz o Pix": avisa a barbearia e pede a conferência.
+   *
+   * Só no Pix estático — no dinâmico a confirmação chega sozinha. Vem nulo fora
+   * disso, então o botão não aparece onde não faria sentido.
+   */
+  pixPaidUrl: string | null
 }
 
 export async function getBookingRequest(

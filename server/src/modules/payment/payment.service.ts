@@ -370,6 +370,15 @@ export async function settleStaticPayment(
       )
     }
 
+    // O prazo vale mesmo antes da limpeza persistir EXPIRED no agendamento.
+    // Recusar aqui impede reativar uma reserva que a tela já mostrou vencida.
+    if (payment.expiresAt <= now || isPaymentWindowClosed(appointment, now)) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "O prazo de pagamento deste agendamento terminou.")
+    }
+    if (payment.status === "EXPIRED" || payment.status === "CANCELED") {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Esta cobrança já foi encerrada.")
+    }
+
     if (decision === "PAID") {
       await tx.payment.update({
         where: { id: payment.id },

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, QrCode } from 'lucide-react'
+import { Copy, MessageCircle, QrCode } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { PixView } from '@/services/public-booking'
 
@@ -9,8 +9,8 @@ import type { PixView } from '@/services/public-booking'
  * Tudo vem pronto do backend: payload, QR e valor. Esta tela não calcula
  * dinheiro nem monta BR Code — só desenha e copia.
  *
- * O que ela deliberadamente NÃO tem: botão "já paguei". Nada aqui muda o estado
- * do pagamento, porque nada no navegador pode. No Pix estático quem confirma é
+ * O CTA "Já fiz o Pix" só abre uma conversa. Nada aqui muda o estado
+ * do pagamento. No Pix estático quem confirma é
  * a barbearia conferindo o extrato; no dinâmico, a notificação do provedor.
  */
 
@@ -92,9 +92,12 @@ function CopyButton({
 export default function PixPayment({
   pix,
   amountFormatted,
+  paidUrl,
 }: {
   pix: PixView
   amountFormatted: string
+  /** "Já fiz o Pix". Vem pronto do servidor; nulo = botão não aparece. */
+  paidUrl?: string | null
 }) {
   return (
     <section
@@ -177,11 +180,36 @@ export default function PixPayment({
         estático seria mentira, e é o tipo de mentira que faz a pessoa não
         avisar a barbearia e perder o horário.
       */}
-      <p className="text-sm text-[var(--foreground)] border-t border-[var(--border)]/60 pt-3">
-        {pix.requiresManualConfirmation
-          ? 'Após o pagamento, aguarde a confirmação da barbearia.'
-          : 'A confirmação é automática assim que o pagamento é processado. Você não precisa avisar ninguém.'}
-      </p>
+      <div className="border-t border-[var(--border)]/60 pt-3 space-y-3">
+        <p className="text-sm text-[var(--foreground)]">
+          {pix.requiresManualConfirmation
+            ? paidUrl
+              ? 'Após realizar o Pix, envie a confirmação pelo WhatsApp. O agendamento será confirmado após a barbearia verificar o recebimento.'
+              : 'Após o pagamento, aguarde a confirmação da barbearia.'
+            : 'A confirmação é automática assim que o pagamento é processado. Você não precisa avisar ninguém.'}
+        </p>
+
+        {/*
+          "Já fiz o Pix" — SOMENTE comunicação.
+
+          Não marca pagamento, não confirma agendamento e não chama rota
+          administrativa nenhuma: é um link para o WhatsApp, montado no servidor.
+          Quem confirma continua sendo a barbearia depois de ver o extrato, e é
+          por isso que a mensagem PEDE a conferência em vez de anunciá-la.
+
+          O comprovante não vai daqui: a pessoa anexa a imagem dentro do
+          WhatsApp, se quiser, depois que a conversa abrir.
+        */}
+        {pix.source === 'STATIC_PIX' && pix.requiresManualConfirmation && paidUrl && (
+          <Button
+            className="w-full min-h-11 h-auto whitespace-normal gap-2 text-center"
+            onClick={() => window.open(paidUrl, '_blank', 'noopener,noreferrer')}
+          >
+            <MessageCircle className="h-4 w-4 shrink-0" />
+            <span>Já fiz o Pix — confirmar pelo WhatsApp</span>
+          </Button>
+        )}
+      </div>
     </section>
   )
 }

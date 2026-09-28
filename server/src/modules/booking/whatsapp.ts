@@ -153,3 +153,43 @@ export function buildNewRequestLink(
   const digits = number.replace(/[^0-9]/g, "")
   return `https://wa.me/${digits}?text=${encodeURIComponent(buildNewRequestMessage(data))}`
 }
+
+/**
+ * "Já fiz o Pix" — o cliente avisa que pagou e pede a conferência.
+ *
+ * SOMENTE COMUNICAÇÃO. Abrir este link não marca pagamento, não confirma
+ * agendamento, não cria registro financeiro e não chama rota administrativa
+ * nenhuma. Quem confirma continua sendo a barbearia, depois de ver o dinheiro no
+ * extrato — e é por isso que a mensagem *pede* a confirmação em vez de anunciá-la.
+ *
+ * O comprovante não é anexado aqui: o cliente pode juntar a imagem dentro do
+ * WhatsApp depois que a conversa abrir. Nada é enviado ao nosso backend.
+ */
+export function buildPixPaidMessage(
+  data: WhatsappConfirmation & { endsAtClock: string; customerName?: string },
+): string {
+  const [year, month, day] = data.date.split("-")
+  const lines = [
+    "Olá! Realizei o pagamento via Pix do meu agendamento na ErickCorttes.",
+    "",
+    ...(data.customerName ? [`Cliente: ${data.customerName}`] : []),
+    `Serviço: ${data.serviceName}`,
+    `Data: ${day}/${month}/${year}`,
+    `Horário: ${data.startsAtClock} às ${data.endsAtClock}`,
+    ...(data.amountFormatted ? [`Valor: R$ ${data.amountFormatted}`] : []),
+    `Referência: ${data.reference}`,
+    "",
+    "Poderia confirmar o recebimento, por favor?",
+  ]
+  return lines.join("\n")
+}
+
+/** Link do "já fiz o Pix". `null` sem número configurado. */
+export function buildPixPaidLink(
+  data: WhatsappConfirmation & { endsAtClock: string; customerName?: string },
+): string | null {
+  const number = env.BARBERSHOP_WHATSAPP_NUMBER
+  if (!number) return null
+  const digits = number.replace(/[^0-9]/g, "")
+  return `https://wa.me/${digits}?text=${encodeURIComponent(buildPixPaidMessage(data))}`
+}

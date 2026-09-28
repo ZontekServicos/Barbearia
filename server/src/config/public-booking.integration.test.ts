@@ -1145,6 +1145,9 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
     const view = await call(`/booking/requests/${publicToken}`)
     assert.equal(view.body.data.appointment.status, "CONFIRMED")
     assert.equal(view.body.data.payment, null)
+    assert.equal(view.body.data.pix, null)
+    assert.equal(view.body.data.pixPaidUrl, null)
+    assert.equal(view.body.data.paymentHelpUrl, null)
     assert.match(view.body.data.reference, /^EC-[23456789ABCDEFGHJKLMNPQRTUVWXYZ]{6}$/)
 
     const url: string = view.body.data.whatsappUrl

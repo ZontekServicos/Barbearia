@@ -103,6 +103,7 @@ async function book(serviceId: string, startsAt = "09:00") {
   return {
     appointmentId: created.body.data.appointment.id as string,
     publicToken: created.body.data.publicToken as string,
+    contactHandle: registered.body.data.contactHandle as string,
   }
 }
 const approve = (access: string, id: string) =>
@@ -478,13 +479,11 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
       access,
       body: { decision: "PAID" },
     })
-    assert.equal(late.status, 200, "ainda AWAITING_PAYMENT no banco: a barbearia pode conciliar")
-    // O horário nunca deixou de estar protegido no banco, então confirmar aqui
-    // não gera sobreposição — a EXCLUDE segue cobrindo AWAITING_PAYMENT.
-    assert.equal(
-      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
-      "CONFIRMED",
-    )
+    assert.equal(late.status, 409, "reserva vencida nao pode ser reativada")
+    const unchanged = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(unchanged.status, "PENDING")
+    assert.equal(unchanged.paidAt, null)
+    assert.equal(await prisma.adminAuditLog.count({ where: { action: "PAYMENT_PAID" } }), 0)
   })
 
   it("serviço gratuito não pede Pix: aprovar confirma direto", async () => {
@@ -819,4 +818,261 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.match(message, /confirmado/i)
     assert.ok(message.includes("40,00"))
   })
+
+  // -------------------------------------------------------------------------
+  // "Já fiz o Pix" — comunicação, nunca confirmação
+  // -------------------------------------------------------------------------
+
+  it('o CTA "já fiz o Pix" existe só com Pix da barbearia aguardando pagamento', async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+
+    // PENDING: não há Pix na tela, logo não há o que confirmar.
+    assert.equal((await call(`/booking/requests/${publicToken}`)).body.data.pixPaidUrl, null)
+
+    await approve(access, appointmentId)
+    const paying = await call(`/booking/requests/${publicToken}`)
+    assert.equal(paying.body.data.pix.source, "STATIC_PIX")
+    const url: string = paying.body.data.pixPaidUrl
+    assert.ok(url, "aguardando Pix manual oferece o CTA")
+    assert.ok(url.startsWith("https://wa.me/5571999990000?text="), url.slice(0, 44))
+
+    // Confirmado: o Pix e o CTA saem da tela.
+    await call(`/admin/appointments/${appointmentId}/payment`, {
+      access,
+      body: { decision: "PAID" },
+    })
+    const done = await call(`/booking/requests/${publicToken}`)
+    assert.equal(done.body.data.appointment.status, "CONFIRMED")
+    assert.equal(done.body.data.pix, null)
+    assert.equal(done.body.data.pixPaidUrl, null, "não há mais o que avisar")
+    assert.ok(done.body.data.whatsappUrl, "o CTA final de confirmação assume")
+  })
+
+  it("a mensagem traz valor e referência reais, e nenhum dado interno", async () => {
+    const service = await makeService(12_050)
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const view = await call(`/booking/requests/${publicToken}`)
+    const message = decodeURIComponent(view.body.data.pixPaidUrl.split("?text=")[1])
+
+    assert.match(message, /Realizei o pagamento via Pix/)
+    assert.ok(message.includes("Valor: R$ 120,50"), "o valor é o da cobrança")
+    assert.ok(message.includes(`Referência: ${view.body.data.reference}`))
+    assert.ok(message.includes("Guilherme"), "nome do cadastro")
+    assert.match(message, /Poderia confirmar o recebimento/)
+    // Pede, não anuncia.
+    assert.doesNotMatch(message, /pagamento confirmado|agendamento confirmado/i)
+
+    const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    for (const secret of [publicToken, appointmentId, payment.id, appointment.userId, PIX_KEY]) {
+      assert.ok(!message.includes(secret), "nada interno na mensagem")
+    }
+    assert.ok(!message.includes(view.body.data.pix.copyPaste), "o BR Code não vai na mensagem")
+    assert.doesNotMatch(message, /eyJ|Bearer|v2\.|00020101|secret/i)
+  })
+
+  it("consultar a tela do Pix não muda pagamento nem agendamento", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    const paymentBefore = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const auditBefore = await prisma.adminAuditLog.count()
+
+    // É o que a tela faz enquanto a pessoa paga e volta do WhatsApp.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const view = await call(`/booking/requests/${publicToken}`)
+      assert.equal(view.body.data.appointment.status, "AWAITING_PAYMENT")
+      assert.equal(view.body.data.payment.status, "PENDING")
+      assert.ok(view.body.data.pixPaidUrl, "o CTA continua disponível")
+      assert.equal(view.body.data.whatsappUrl, null, "nunca oferece confirmação")
+    }
+
+    const after = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    const paymentAfter = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(after.status, "AWAITING_PAYMENT")
+    assert.equal(paymentAfter.status, "PENDING")
+    assert.equal(paymentAfter.paidAt, null)
+    assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime(), "agendamento intocado")
+    assert.equal(
+      paymentAfter.updatedAt.getTime(),
+      paymentBefore.updatedAt.getTime(),
+      "cobrança intocada",
+    )
+    assert.equal(
+      await prisma.adminAuditLog.count(),
+      auditBefore,
+      "nenhuma auditoria financeira criada",
+    )
+  })
+
+  it("prazo vencido não oferece o CTA: reserva expirada não deve receber Pix", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const past = new Date(Date.now() - 60_000)
+    await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: past } })
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { pendingExpiresAt: past },
+    })
+
+    const view = await call(`/booking/requests/${publicToken}`)
+    assert.equal(view.body.data.appointment.status, "EXPIRED")
+    assert.equal(view.body.data.pix, null)
+    assert.equal(view.body.data.pixPaidUrl, null)
+    assert.equal(view.body.data.paymentHelpUrl, null)
+  })
+  it("CTA: matriz completa de estados do agendamento e pagamento", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    const appointments = ["PENDING", "AWAITING_PAYMENT", "CONFIRMED", "REJECTED", "EXPIRED", "CANCELLED", "COMPLETED", "NO_SHOW"] as const
+    const payments = ["PENDING", "PAID", "FAILED", "EXPIRED", "CANCELED"] as const
+    for (const status of appointments) {
+      await prisma.appointment.update({ where: { id: appointmentId }, data: { status } })
+      for (const paymentStatus of payments) {
+        await prisma.payment.updateMany({ where: { appointmentId }, data: { status: paymentStatus, paidAt: paymentStatus === "PAID" ? new Date() : null } })
+        limits.publicRequestLookupRateLimit.resetKey("127.0.0.1")
+        const response = await call("/booking/requests/" + publicToken)
+        assert.equal(response.status, 200)
+        assert.equal(Boolean(response.body.data.pixPaidUrl), status === "AWAITING_PAYMENT" && paymentStatus === "PENDING", status + "/" + paymentStatus)
+      }
+    }
+  })
+
+  it("CTA: sem WhatsApp, referencia ou cobranca", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    const number = env.env.BARBERSHOP_WHATSAPP_NUMBER
+    try {
+      delete env.env.BARBERSHOP_WHATSAPP_NUMBER
+      const response = await call("/booking/requests/" + publicToken)
+      assert.equal(response.body.data.pixPaidUrl, null)
+      assert.ok(response.body.data.pix)
+    } finally { env.env.BARBERSHOP_WHATSAPP_NUMBER = number }
+    await prisma.appointment.update({ where: { id: appointmentId }, data: { publicReference: null } })
+    assert.equal((await call("/booking/requests/" + publicToken)).body.data.pixPaidUrl, null)
+    await prisma.payment.deleteMany({ where: { appointmentId } })
+    assert.equal((await call("/booking/requests/" + publicToken)).body.data.pixPaidUrl, null)
+  })
+
+  it("CTA: provider dinamico nunca oferece caminho manual paralelo", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    const payload = (await call("/booking/requests/" + publicToken)).body.data.pix.copyPaste
+    for (const pixQrCode of [payload, "invalid", null]) {
+      await prisma.payment.updateMany({ where: { appointmentId }, data: { provider: "manual", providerPaymentId: "provider-private-id", pixQrCode } })
+      const response = await call("/booking/requests/" + publicToken)
+      assert.equal(response.body.data.pixPaidUrl, null)
+      if (pixQrCode === payload) {
+        assert.equal(response.body.data.pix.source, "DYNAMIC_PROVIDER_PIX")
+        assert.equal(response.body.data.pix.requiresManualConfirmation, false)
+      } else assert.equal(response.body.data.pix, null)
+      assert.equal((await call("/admin/appointments/" + appointmentId + "/payment", { access, body: { decision: "PAID" } })).status, 409)
+    }
+  })
+
+  for (const deadline of ["payment", "appointment"] as const) {
+    it("CTA: prazo isolado de " + deadline + " no limite exato, sem reativacao", async () => {
+      const service = await makeService()
+      const { access, id: adminId } = await makeAdmin()
+      const { appointmentId, publicToken } = await book(service.id)
+      await approve(access, appointmentId)
+      const now = new Date()
+      if (deadline === "payment") await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: now } })
+      else await prisma.appointment.update({ where: { id: appointmentId }, data: { pendingExpiresAt: now } })
+      const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+      const paymentBefore = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+      const auditBefore = await prisma.adminAuditLog.count()
+      const { getPublicRequest } = await import("../modules/booking/public-booking.service.js")
+      const view = await getPublicRequest(publicToken, now)
+      assert.equal(view.appointment.status, "EXPIRED")
+      assert.equal(view.pix, null)
+      assert.equal(view.pixPaidUrl, null)
+      assert.equal(view.paymentHelpUrl, null)
+      const { settleStaticPayment } = await import("../modules/payment/payment.service.js")
+      await assert.rejects(settleStaticPayment(adminId, appointmentId, "PAID", now))
+      assert.deepEqual(await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } }), before)
+      assert.deepEqual(await prisma.payment.findUniqueOrThrow({ where: { appointmentId } }), paymentBefore)
+      assert.equal(await prisma.adminAuditLog.count(), auditBefore)
+    })
+  }
+
+  it("CTA: verbos e estados manipulados nas rotas publicas nunca escrevem", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    const paymentBefore = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const auditBefore = await prisma.adminAuditLog.count()
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"]) {
+      for (const status of ["PAID", "CONFIRMED", "RECEIVED"]) {
+        for (const suffix of ["", "/payment", "/paid", "/confirm", "/receipt"]) {
+          limits.globalRateLimit.resetKey("127.0.0.1")
+          const response = await call("/booking/requests/" + publicToken + suffix, { method, body: { status, decision: status, amountCents: 1 } })
+          assert.ok([400, 401, 403, 404].includes(response.status), method + suffix + ": " + response.status)
+        }
+      }
+    }
+    assert.deepEqual(await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } }), before)
+    assert.deepEqual(await prisma.payment.findUniqueOrThrow({ where: { appointmentId } }), paymentBefore)
+    assert.equal(await prisma.adminAuditLog.count(), auditBefore)
+  })
+
+  for (const [amountCents, formatted] of [[4000, "40,00"], [12050, "120,50"]] as const) {
+    it("CTA: mensagem persistida R$ " + formatted + " sem dados internos ou segredos", async () => {
+      const service = await makeService(amountCents)
+      const { access } = await makeAdmin()
+      const { appointmentId, publicToken, contactHandle } = await book(service.id)
+      await approve(access, appointmentId)
+      const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+      const session = await tokens.issueSession(appointment.userId)
+      const customer = await prisma.user.findUniqueOrThrow({ where: { id: appointment.userId } })
+      const providerPaymentId = "provider-private-" + randomBytes(12).toString("hex")
+      await prisma.payment.updateMany({ where: { appointmentId }, data: { providerPaymentId } })
+      // Alterar o catálogo e adulterar a query não podem substituir o valor da cobrança.
+      await prisma.service.update({ where: { id: service.id }, data: { priceCents: 1, name: "Catalogo alterado" } })
+      const response = await call("/booking/requests/" + publicToken + "?amountCents=1&amountFormatted=0,01&phone=5511000000000&status=PAID")
+      assert.equal(response.status, 200)
+      const view = response.body.data
+      const url = new URL(view.pixPaidUrl)
+      assert.equal(url.origin, "https://wa.me")
+      assert.equal(url.pathname, "/5571999990000")
+      assert.notEqual(url.pathname.slice(1), customer.phone.replace(/[^0-9]/g, ""))
+      assert.deepEqual([...url.searchParams.keys()], ["text"])
+      const message = url.searchParams.get("text")!
+      const [year, month, day] = view.appointment.date.split("-")
+      assert.ok(message.includes("Cliente: " + customer.fullName))
+      assert.ok(message.includes("Serviço: " + appointment.serviceName))
+      assert.ok(message.includes("Data: " + day + "/" + month + "/" + year))
+      assert.ok(message.includes("Horário: " + view.appointment.startsAtClock + " às " + view.appointment.endsAtClock))
+      assert.ok(message.includes("Valor: R$ " + formatted))
+      assert.ok(message.includes("Referência: " + appointment.publicReference))
+      assert.ok(!message.includes("Catalogo alterado"))
+      const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+      for (const forbidden of [publicToken, contactHandle, appointmentId, payment.id, providerPaymentId, customer.id, access, session.accessToken, session.refreshToken, PIX_KEY, view.pix.copyPaste, env.env.DATABASE_URL, env.env.JWT_ACCESS_SECRET]) {
+        assert.ok(!decodeURIComponent(url.href).includes(forbidden), "URL nao inclui campos privados")
+      }
+      assert.doesNotMatch(message, /publicToken|contactHandle|appointmentId|paymentId|providerPaymentId|userId|JWT|refresh.?token|DATABASE_URL|webhook.?secret|provider.?secret|[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)
+      assert.doesNotMatch(message, /pagamento confirmado|agendamento confirmado/i)
+      assert.match(message, /Poderia confirmar o recebimento/)
+    })
+  }
+
 })

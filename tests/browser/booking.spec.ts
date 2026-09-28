@@ -508,7 +508,7 @@ test('acompanhamento PENDING: aguarda o barbeiro, sem cobranca e sem WhatsApp', 
     whatsappUrl: null,
   })
 
-  await expect(page.getByRole('heading', { name: 'Aguardando confirmação' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
   // Nunca "confirmado" antes de a barbearia decidir.
   await expect(page.getByRole('heading', { name: /confirmado!/ })).toHaveCount(0)
   await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
@@ -516,25 +516,28 @@ test('acompanhamento PENDING: aguarda o barbeiro, sem cobranca e sem WhatsApp', 
   await expect(page.getByText('Corte', { exact: true })).toBeVisible()
 })
 
-test('acompanhamento AWAITING_PAYMENT: valor, prazo, Pix e nenhum "ja paguei"', async ({ page }) => {
+test('acompanhamento AWAITING_PAYMENT: valor, prazo e Pix dinamico sem CTA manual', async ({ page }) => {
   await setup(page)
   await openStatus(page, {
     appointment: statusAppointment('AWAITING_PAYMENT'),
     reference: 'EC-7F3K2Q',
-    payment: payment('PENDING'),
+    payment: { ...payment('PENDING'), pixQrCode: BRCODE },
+    pix: dynamicPix,
+    pixPaidUrl: null,
+    paymentHelpUrl: null,
     whatsappUrl: null,
   })
 
-  await expect(page.getByRole('heading', { name: 'Pedido aprovado!' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
   await expect(page.getByText('R$ 35,00').first()).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: 'Aguardando pagamento' })).toBeVisible()
   await expect(page.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
   await expect(page.getByText('14:00')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Pagar agora' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Abrir outras formas de pagamento' })).toHaveAttribute(
     'href',
     'https://pagamento.invalido/manual/abc',
   )
-  await expect(page.getByText('00020126MANUALabc123')).toBeVisible()
+  await expect(page.getByText(BRCODE, { exact: true })).toBeVisible()
 
   // Nada que afirme pagamento por conta própria, e nada de WhatsApp ainda.
   await expect(page.getByRole('button', { name: /j. paguei/i })).toHaveCount(0)
@@ -583,7 +586,7 @@ test('acompanhamento: pagamento recusado nao confirma e oferece nova tentativa',
     whatsappUrl: null,
   })
 
-  await expect(page.getByRole('status').filter({ hasText: 'Pagamento recusado' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Não foi possível confirmar o pagamento' })).toBeVisible()
   await expect(page.getByText(/ainda pode tentar de novo/i)).toBeVisible()
   await expect(page.getByRole('heading', { name: /confirmado!/ })).toHaveCount(0)
   await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
@@ -631,7 +634,7 @@ for (const width of [360, 375, 390, 412, 430]) {
       payment: payment('PENDING'),
       whatsappUrl: null,
     })
-    await expect(page.getByRole('heading', { name: 'Pedido aprovado!' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
     await noOverflow(page)
     await touchTargets(page)
   })
@@ -696,14 +699,14 @@ test('token da URL prevalece sobre o comprovante em localStorage', async ({ page
   await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), stored)
   await page.goto('/tests/browser/fixture.html?page=status-route&token=' + urlToken)
 
-  await expect(page.getByRole('heading', { name: 'Aguardando confirmação' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
   expect(asked.some(u => u.includes(urlToken))).toBe(true)
   expect(asked.some(u => u.includes(stored))).toBe(false)
 })
 
 // §29 — estados reais restantes, com texto coerente e sem dado interno.
 for (const [status, heading] of [
-  ['REJECTED', 'Pedido não aceito'],
+  ['REJECTED', 'Solicitação recusada'],
   ['CANCELLED', 'Agendamento cancelado'],
   ['COMPLETED', 'Atendimento concluído'],
 ] as const) {
@@ -787,7 +790,7 @@ test('Pix estatico: aprovado, com QR, chave e Copia e Cola, sem dizer confirmado
   // O QR e grafico de verdade, nao a chave em texto.
   expect(await page.locator('[role="img"] svg').count()).toBe(1)
   await expect(page.getByText('5f79…8c21')).toBeVisible()
-  await expect(page.getByText('ErickCorttes Barbearia')).toBeVisible()
+  await expect(page.getByText('ErickCorttes Barbearia', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Copiar chave Pix' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Copiar código Pix' })).toBeVisible()
   await expect(page.getByText('Pix Copia e Cola')).toBeVisible()
@@ -1577,4 +1580,247 @@ test('conta bloqueada: sem numero o contato nao e oferecido', async ({ page }) =
   await expect(page.getByRole('link', { name: 'Falar com a barbearia' })).toHaveCount(0)
   // A tela segue utilizavel: a saida continua la.
   await expect(page.getByRole('button', { name: /Sair|Voltar/ }).first()).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// CTA "Já fiz o Pix — confirmar pelo WhatsApp"
+// ---------------------------------------------------------------------------
+
+const PAID_MESSAGE = [
+  'Olá! Realizei o pagamento via Pix do meu agendamento na ErickCorttes.',
+  '',
+  'Cliente: Cliente QA',
+  'Serviço: Corte',
+  'Data: 29/09/2026',
+  'Horário: 18:20 às 18:50',
+  'Valor: R$ 35,00',
+  'Referência: EC-7F3K2Q',
+  '',
+  'Poderia confirmar o recebimento, por favor?',
+].join('\n')
+const PAID_URL = 'https://wa.me/5571988887777?text=' + encodeURIComponent(PAID_MESSAGE)
+
+const payingView = (pix: unknown, over: Record<string, unknown> = {}) => ({
+  appointment: statusAppointment('AWAITING_PAYMENT'),
+  reference: 'EC-7F3K2Q',
+  payment: payment('PENDING'),
+  whatsappUrl: null,
+  pix,
+  paymentHelpUrl: 'https://wa.me/5571988887777?text=ajuda',
+  notifyUrl: null,
+  pixPaidUrl: PAID_URL,
+  ...over,
+})
+
+test('Pix manual: CTA "ja fiz o Pix" aparece abaixo da area Pix', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, payingView(staticPix))
+
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  const cta = page.getByRole('button', { name: /Já fiz o Pix — confirmar pelo WhatsApp/ })
+  await expect(cta).toBeVisible()
+
+
+  // Copiar chave e copia-e-cola continuam disponiveis.
+  await expect(page.getByRole('button', { name: 'Copiar chave Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Copiar código Pix' })).toBeVisible()
+
+  // Texto de orientacao conforme especificado.
+  await expect(page.getByText(/Após realizar o Pix, envie a confirmação pelo WhatsApp/)).toBeVisible()
+  await expect(page.getByText(/O agendamento será confirmado após a barbearia verificar o recebimento/)).toBeVisible()
+
+  // O CTA vem DEPOIS do QR e do copia-e-cola.
+  const order = await page.locator('main').evaluate(node => {
+    const text = (node as HTMLElement).innerText
+    return {
+      qr: text.indexOf('Escaneie no aplicativo'),
+      copia: text.indexOf('Pix Copia e Cola'),
+      cta: text.indexOf('Já fiz o Pix'),
+    }
+  })
+  expect(order.qr).toBeLessThan(order.cta)
+  expect(order.copia).toBeLessThan(order.cta)
+
+  // E ainda NAO diz confirmado.
+  await expect(page.getByText(/Agendamento confirmado/)).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /^Confirmar pelo WhatsApp/ })).toHaveCount(0)
+})
+
+test('Pix manual: clique explicito e repetido abre WhatsApp sem escrita na API', async ({ page, context }) => {
+  await setup(page)
+  await context.route('https://wa.me/**', route => route.fulfill({ contentType: 'text/html', body: '<p>WhatsApp interceptado pelo teste</p>' }))
+  await page.addInitScript(() => {
+    const calls: unknown[][] = []
+    Object.assign(window, { pixOpenCalls: calls })
+    const original = window.open.bind(window)
+    window.open = (...args: Parameters<typeof window.open>) => {
+      calls.push(args)
+      return original(...args)
+    }
+  })
+  await openStatus(page, payingView(staticPix))
+  const cta = page.getByRole('button', { name: /Já fiz o Pix/ })
+  await expect(cta).toBeVisible()
+  const calls = () => page.evaluate(() => (window as any).pixOpenCalls)
+  expect(await calls()).toEqual([])
+  expect(context.pages()).toHaveLength(1)
+  const writes: string[] = []
+  page.on('request', request => {
+    if (request.url().includes('/api/') && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method())) {
+      writes.push(request.method() + ' ' + request.url())
+    }
+  })
+  for (let count = 1; count <= 3; count++) {
+    const opened = context.waitForEvent('page')
+    await cta.click()
+    const popup = await opened
+    await popup.waitForLoadState()
+    expect(await popup.evaluate(() => window.opener === null)).toBe(true)
+    expect(await calls()).toHaveLength(count)
+    expect((await calls())[count - 1]).toEqual([PAID_URL, '_blank', 'noopener,noreferrer'])
+    await popup.close()
+  }
+  expect(writes).toEqual([])
+  await expect(page.getByRole('status').filter({ hasText: 'Aguardando pagamento' })).toBeVisible()
+  await expect(page.getByText(/Agendamento confirmado/)).toHaveCount(0)
+})
+
+test('Pix dinamico: CTA manual nao aparece — a confirmacao e automatica', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, payingView(dynamicPix))
+
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  await expect(page.getByText(/confirmação é automática/)).toBeVisible()
+  await expect(page.getByText(/Após realizar o Pix, envie a confirmação/)).toHaveCount(0)
+})
+
+test('CTA "ja fiz o Pix" ausente em PENDING, CONFIRMED e EXPIRED', async ({ page }) => {
+  await setup(page)
+
+  // PENDING: sem cobranca.
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q', payment: null, whatsappUrl: null,
+    pix: null, paymentHelpUrl: null, notifyUrl: null, pixPaidUrl: null,
+  })
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+
+  // CONFIRMED.
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await setup(page)
+  await page.route('**/api/booking/requests/**', route => ok(route, {
+    appointment: statusAppointment('CONFIRMED'),
+    reference: 'EC-7F3K2Q',
+    payment: { ...payment('PAID'), expiresInSeconds: 0 },
+    whatsappUrl: 'https://wa.me/5571988887777?text=ok',
+    pix: null, paymentHelpUrl: null, notifyUrl: null, pixPaidUrl: null,
+  }))
+  await open(page, 'status')
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /^Confirmar pelo WhatsApp/ })).toBeVisible()
+
+  // EXPIRED.
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await setup(page)
+  await page.route('**/api/booking/requests/**', route => ok(route, {
+    appointment: statusAppointment('EXPIRED'),
+    reference: 'EC-7F3K2Q',
+    payment: { ...payment('EXPIRED'), expiresInSeconds: 0 },
+    whatsappUrl: null, pix: null, paymentHelpUrl: null, notifyUrl: null, pixPaidUrl: null,
+  }))
+  await open(page, 'status')
+  await expect(page.getByRole('heading', { name: 'Solicitação expirada' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
+})
+
+for (const width of [360, 375, 390, 412, 430]) {
+  test('CTA "ja fiz o Pix" mobile ' + width + ': cabe e alvo >=44px', async ({ page }) => {
+    await setup(page)
+    await page.setViewportSize({ width, height: 900 })
+    await openStatus(page, payingView(staticPix))
+
+    const cta = page.getByRole('button', { name: /Já fiz o Pix — confirmar pelo WhatsApp/ })
+    await expect(cta).toBeVisible()
+    const box = (await cta.boundingBox())!
+    expect(box.height).toBeGreaterThanOrEqual(44)
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(width)
+    await noOverflow(page)
+    await touchTargets(page)
+    for (const element of [cta, page.getByRole('link', { name: 'Falar com a barbearia' }), page.getByRole('img', { name: 'QR Code para pagamento via Pix' }), page.getByRole('button', { name: 'Copiar código Pix' })]) {
+      const rect = (await element.boundingBox())!
+      expect(rect.x).toBeGreaterThanOrEqual(0)
+      expect(rect.x + rect.width).toBeLessThanOrEqual(width)
+      expect(rect.height).toBeGreaterThanOrEqual(44)
+    }
+    expect(await cta.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
+    await page.screenshot({ path: '.tmp-pix-whatsapp-audit/mobile-' + width + '.png', fullPage: true })
+  })
+}
+
+for (const status of ['PAID', 'FAILED', 'EXPIRED', 'CANCELED']) {
+  test('CTA: pagamento ' + status + ' nao oferece Pix mesmo com URL residual', async ({ page }) => {
+    await setup(page)
+    await openStatus(page, payingView(staticPix, { payment: payment(status) }))
+    await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+    await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
+  })
+}
+
+test('CTA: sem WhatsApp configurado nao instrui envio indisponivel', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, payingView(staticPix, { pixPaidUrl: null, paymentHelpUrl: null }))
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  await expect(page.getByText(/envie a confirmação pelo WhatsApp/)).toHaveCount(0)
+})
+
+for (const failure of ['lenta', 'indisponivel']) {
+  test('CTA: prazo local vencido oculta pagamento com API ' + failure, async ({ page }) => {
+    await setup(page)
+    await page.clock.install({ time: new Date('2026-09-24T15:00:00Z') })
+    let calls = 0
+    await page.route('**/api/booking/requests/**', route => {
+      if (++calls === 1) return ok(route, payingView(staticPix, { payment: payment('PENDING', 2) }))
+      if (failure === 'indisponivel') return route.fulfill({ status: 503, json: { success: false, error: { code: 'UNAVAILABLE', message: 'Indisponível' } } })
+      return undefined
+    })
+    await page.addInitScript(token => localStorage.setItem('ec.booking.lastRequest', token), TOKEN)
+    await open(page, 'status')
+    await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toBeVisible()
+    await page.clock.runFor(2100)
+    await expect(page.getByText(/O prazo terminou. Não realize o pagamento/)).toBeVisible()
+    await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+    await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
+    await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Copiar/ })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: /Falar com a barbearia|Abrir outras formas de pagamento/ })).toHaveCount(0)
+  })
+}
+
+test('CTA: polling apos ADMIN confirmar remove todas as opcoes de pagamento', async ({ page }) => {
+  await setup(page)
+  let confirmed = false
+  await page.route('**/api/booking/requests/**', route => ok(route, confirmed ? payingView(null, {
+    appointment: statusAppointment('CONFIRMED'), payment: payment('PAID', 0),
+    pixPaidUrl: null, paymentHelpUrl: null, whatsappUrl: 'https://wa.me/5571999990000?text=confirmado',
+  }) : payingView(staticPix)))
+  await page.addInitScript(token => localStorage.setItem('ec.booking.lastRequest', token), TOKEN)
+  await open(page, 'status')
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toBeVisible()
+  confirmed = true
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  await expect(page.getByText(/Pagamento confirmado —/)).toBeVisible()
+  await expect(page.getByRole('link', { name: /^Confirmar pelo WhatsApp/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix|Copiar/ })).toHaveCount(0)
+  await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
+  await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Falar com a barbearia' })).toHaveCount(0)
 })

@@ -154,6 +154,7 @@ export default function BookingStatus() {
           payment={view.payment}
           pix={view.pix}
           helpUrl={view.paymentHelpUrl}
+          paidUrl={view.pixPaidUrl}
           onRefresh={() => void load({ quiet: true })}
         />
       )}
@@ -326,19 +327,20 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 /**
  * Painel de pagamento.
  *
- * Não existe botão "já paguei": o estado só muda quando o BACKEND recebe e
- * valida a notificação do provedor. O que esta tela oferece é abrir o checkout,
- * copiar o Pix e reconsultar — nada que afirme pagamento por conta própria.
+ * O estado só muda quando o backend valida o webhook ou a decisão do ADMIN.
+ * O CTA "Já fiz o Pix" apenas abre uma conversa, sem confirmar pagamento.
  */
 function PaymentPanel({
   payment,
   pix,
   helpUrl,
+  paidUrl,
   onRefresh,
 }: {
   payment: PaymentView
   pix: PixView | null
   helpUrl: string | null
+  paidUrl: string | null
   onRefresh: () => void
 }) {
   // Contagem regressiva a partir do que o servidor informou. O relógio do
@@ -402,18 +404,20 @@ function PaymentPanel({
                 </span>
               </>
             ) : (
-              'O prazo terminou. Estamos verificando…'
+              'O prazo terminou. Não realize o pagamento. Estamos verificando…'
             )}
           </p>
 
           {/* Pix: QR, chave e Copia e Cola, tudo montado no backend. */}
-          {pix && <PixPayment pix={pix} amountFormatted={payment.amountFormatted} />}
+          {remaining > 0 && pix && (
+            <PixPayment pix={pix} amountFormatted={payment.amountFormatted} paidUrl={paidUrl} />
+          )}
 
           {/*
             Checkout do provedor, quando existe. Complementa o Pix em vez de
             substituí-lo: alguns provedores oferecem cartão na mesma cobrança.
           */}
-          {payment.checkoutUrl && (
+          {remaining > 0 && payment.checkoutUrl && (
             <Button variant={pix ? 'outline' : 'default'} className="w-full h-11" asChild>
               <a href={payment.checkoutUrl} target="_blank" rel="noopener noreferrer">
                 Abrir outras formas de pagamento
@@ -425,7 +429,7 @@ function PaymentPanel({
             Sem Pix apresentável e sem checkout: não inventamos QR nenhum. A
             pessoa fala com a barbearia, que é a única saída honesta aqui.
           */}
-          {!pix && !payment.checkoutUrl && (
+          {remaining > 0 && !pix && !payment.checkoutUrl && (
             <p className="text-sm text-[var(--foreground)]">
               Não conseguimos gerar o pagamento agora. Fale com a barbearia para
               combinar o pagamento e garantir seu horário.
@@ -436,7 +440,8 @@ function PaymentPanel({
             "Falar com a barbearia" durante o pagamento — mensagem que diz
             APROVADO, nunca confirmado.
           */}
-          {helpUrl && (
+          {/* Ajuda genérica, secundária ao "já fiz o Pix". */}
+          {remaining > 0 && helpUrl && (
             <Button variant="ghost" className="w-full h-11 text-[var(--primary)]" asChild>
               <a href={helpUrl} target="_blank" rel="noopener noreferrer">
                 <MessageCircle className="h-4 w-4 mr-2" />

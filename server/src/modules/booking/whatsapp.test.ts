@@ -10,8 +10,14 @@ Object.assign(process.env, {
   BARBERSHOP_WHATSAPP_NUMBER: "+5571999990000",
 })
 
-const { buildConfirmationMessage, buildWhatsappLink, buildNewRequestMessage, buildNewRequestLink } =
-  await import("./whatsapp.js")
+const {
+  buildConfirmationMessage,
+  buildWhatsappLink,
+  buildNewRequestMessage,
+  buildNewRequestLink,
+  buildPixPaidMessage,
+  buildPixPaidLink,
+} = await import("./whatsapp.js")
 const { generatePublicReference, generateUniquePublicReference } = await import(
   "./public-reference.js"
 )
@@ -190,4 +196,80 @@ describe("aviso de nova solicitação à barbearia", () => {
     const url = buildNewRequestLink({ ...request, customerName: "+5511888887777" })!
     assert.ok(url.startsWith("https://wa.me/5571999990000?"), "destino inalterado")
   })
+})
+
+describe('mensagem "já fiz o Pix"', () => {
+  const paid = {
+    serviceName: "Corte + Barba",
+    date: "2026-09-29",
+    startsAtClock: "09:00",
+    endsAtClock: "09:40",
+    reference: "EC-7F3K2Q",
+    amountFormatted: "40,00",
+    customerName: "Guilherme Santana",
+  }
+
+  it("informa o pagamento e PEDE a conferência", () => {
+    const message = buildPixPaidMessage(paid)
+    assert.ok(
+      message.startsWith("Olá! Realizei o pagamento via Pix do meu agendamento na ErickCorttes."),
+    )
+    assert.ok(message.includes("Cliente: Guilherme Santana"))
+    assert.ok(message.includes("Serviço: Corte + Barba"))
+    assert.ok(message.includes("Data: 29/09/2026"))
+    assert.ok(message.includes("Horário: 09:00 às 09:40"))
+    assert.ok(message.includes("Valor: R$ 40,00"))
+    assert.ok(message.includes("Referência: EC-7F3K2Q"))
+    assert.ok(message.includes("Poderia confirmar o recebimento, por favor?"))
+  })
+
+  it("pede, nunca afirma que está confirmado", () => {
+    // Quem confirma é a barbearia, depois de olhar o extrato. Uma mensagem que
+    // afirmasse confirmação induziria o cliente a achar que já está resolvido.
+    const message = buildPixPaidMessage(paid)
+    assert.doesNotMatch(message, /pagamento confirmado|agendamento confirmado/i)
+    assert.match(message, /Poderia confirmar/)
+  })
+
+  it("funciona sem nome e sem valor", () => {
+    const { customerName, amountFormatted, ...minimal } = paid
+    const message = buildPixPaidMessage(minimal)
+    assert.ok(!message.includes("Cliente:"))
+    assert.ok(!message.includes("Valor:"))
+    assert.ok(message.includes("Referência: EC-7F3K2Q"))
+  })
+
+  it("não carrega identificador interno, chave Pix nem BR Code", () => {
+    const message = buildPixPaidMessage(paid)
+    assert.doesNotMatch(message, /token|handle|bearer|eyJ|secret|00020101/i)
+    assert.doesNotMatch(message, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i, "nenhum UUID")
+  })
+
+  it("aponta para a barbearia, com a mensagem codificada", () => {
+    const url = buildPixPaidLink(paid)!
+    assert.ok(url.startsWith("https://wa.me/5571999990000?text="), url.slice(0, 44))
+    const encoded = url.split("?text=")[1]!
+    assert.ok(!encoded.includes(" "))
+    assert.ok(!encoded.includes("\n"))
+    assert.equal(decodeURIComponent(encoded), buildPixPaidMessage(paid))
+  })
+
+})
+
+it("Pix paid: campos privados extras nunca entram na mensagem ou URL", () => {
+  const privateFields = {
+    publicToken: "private-public-token", contactHandle: "private-contact-handle",
+    appointmentId: "11111111-2222-4333-8444-555555555555", paymentId: "private-payment-id",
+    providerPaymentId: "private-provider-id", userId: "private-user-id", JWT: "private-jwt",
+    refreshToken: "private-refresh-token", pixKey: "private-pix-key", brCode: "private-br-code",
+    DATABASE_URL: "postgresql://private:credential@private/db", webhookSecret: "private-webhook-secret",
+    providerSecret: "private-provider-secret",
+  }
+  const data = { serviceName: "Corte", date: "2026-09-29", startsAtClock: "09:00", endsAtClock: "09:40", reference: "EC-7F3K2Q", amountFormatted: "40,00", customerName: "Cliente", ...privateFields }
+  const message = buildPixPaidMessage(data)
+  const url = decodeURIComponent(buildPixPaidLink(data)!)
+  for (const value of Object.values(privateFields)) {
+    assert.ok(!message.includes(value))
+    assert.ok(!url.includes(value))
+  }
 })

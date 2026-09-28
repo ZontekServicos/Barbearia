@@ -291,10 +291,10 @@ ficar disponível e que um Pix recebido depois precisa de tratamento manual com 
 cliente.
 
 Confirmar num clique ali poderia fechar um horário já oferecido a outra pessoa.
-O servidor continua aceitando a conciliação enquanto a reserva não tiver sido
-tomada — e recusa com conflito quando tiver, porque a varredura já a expirou.
-Nunca há double booking: a `EXCLUDE` cobre `AWAITING_PAYMENT` até a expiração
-efetiva.
+O servidor recusa com HTTP 409 quando vence o prazo da cobrança ou da reserva,
+mesmo antes de a varredura persistir `EXPIRED`. A tentativa não altera o pagamento,
+o agendamento ou a auditoria financeira. Um Pix tardio precisa de tratamento
+manual com o cliente; esta rota não reativa a reserva.
 
 ## Aviso de nova solicitação
 
@@ -326,3 +326,35 @@ saber uma não dá acesso a nada.
 Ela é **estável** da criação até o fim: aprovar não sorteia outra, e um pedido
 recusado a mantém, de modo que o histórico continua identificável dos dois lados
 do balcão.
+
+### "Já fiz o Pix"
+
+Com o QR na tela, o cliente ganha um segundo botão: **"Já fiz o Pix — confirmar
+pelo WhatsApp"**, que abre a conversa com a mensagem já escrita — valor,
+referência, serviço, data e horário.
+
+**É comunicação e nada mais.** Abrir não marca `Payment` como `PAID`, não confirma
+o agendamento, não cria registro na trilha financeira e não chama a rota
+administrativa. Quem confirma continua sendo a barbearia, depois de ver o dinheiro
+no extrato. Por isso a mensagem *pede* — "Poderia confirmar o recebimento, por
+favor?" — em vez de anunciar.
+
+Aparece **só no Pix estático**: numa cobrança de provedor a confirmação chega
+sozinha por webhook, e oferecer o botão ali faria a pessoa cobrar atenção humana
+para algo já automatizado. O link deriva da mesma apresentação de Pix que desenha
+o QR, então, com número de WhatsApp e referência configurados, acompanha o QR da barbearia — e
+desaparece junto quando o prazo vence, porque reserva expirada não deve receber
+pagamento nem pedido de conferência.
+
+O comprovante não é anexado nem enviado ao nosso backend: a pessoa junta a imagem
+dentro do WhatsApp, se quiser, depois que a conversa abrir.
+
+O texto da tela acompanha: *"Após realizar o Pix, envie a confirmação pelo
+WhatsApp. O agendamento será confirmado após a barbearia verificar o
+recebimento."*
+
+Ao zerar o contador no navegador, QR, chave, Copia e Cola, checkout e CTAs de
+pagamento desaparecem imediatamente, inclusive se a API estiver indisponível.
+O texto orienta a não realizar pagamento após o prazo. O CTA abre uma única
+janela por clique explícito com `noopener,noreferrer`; a página nunca abre o
+WhatsApp sozinha. Sem número configurado, não orienta um envio indisponível.
