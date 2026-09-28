@@ -1187,7 +1187,10 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
     const view = await call(`/booking/requests/${created.body.data.publicToken}`)
     assert.equal(view.body.data.appointment.status, "REJECTED")
-    assert.equal(view.body.data.reference, null, "recusado não recebe referência")
-    assert.equal(view.body.data.whatsappUrl, null)
+    // A referência acompanha o pedido desde a criação e permanece depois da
+    // recusa: o histórico continua identificável para cliente e barbearia.
+    assert.match(view.body.data.reference, /^EC-/)
+    assert.equal(view.body.data.whatsappUrl, null, "recusado não oferece confirmação")
+    assert.equal(view.body.data.notifyUrl, null, "recusado não pede aviso")
   })
 })

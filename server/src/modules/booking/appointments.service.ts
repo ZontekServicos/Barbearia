@@ -191,10 +191,27 @@ export async function createAppointment(
         })
       }
 
+      /**
+       * A referência pública nasce COM a reserva.
+       *
+       * Antes só era sorteada na aprovação, e uma solicitação pendente ficava
+       * sem identificador nenhum que pudesse circular — o cliente que quisesse
+       * falar com a barbearia sobre o próprio pedido teria de citar o token de
+       * acompanhamento, que é credencial e não pode sair do aparelho dele.
+       *
+       * Não é credencial: não abre consulta, não substitui o publicToken, e
+       * saber uma não dá acesso a nada. É por isso que ela pode existir desde o
+       * início e circular por WhatsApp.
+       */
+      const publicReference = await generateUniquePublicReference(async candidate =>
+        (await tx.appointment.count({ where: { publicReference: candidate } })) > 0,
+      )
+
       return tx.appointment.create({
       data: {
         userId,
         serviceId: service.id,
+        publicReference,
         startsAt,
         endsAt,
         reservedEndsAt,
@@ -541,6 +558,8 @@ export async function decidePendingRequest(
       if (current.status !== "PENDING") {
         throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
       }
+      // A reserva já nasceu com referência; reservas antigas, anteriores a essa
+      // mudança, ainda podem não ter — e aí ela é sorteada aqui, sob o lock.
       if (current.publicReference) return current
       const reserved = await generateUniquePublicReference(async candidate =>
         (await tx.appointment.count({ where: { publicReference: candidate } })) > 0,

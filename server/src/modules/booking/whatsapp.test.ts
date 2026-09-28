@@ -10,7 +10,8 @@ Object.assign(process.env, {
   BARBERSHOP_WHATSAPP_NUMBER: "+5571999990000",
 })
 
-const { buildConfirmationMessage, buildWhatsappLink } = await import("./whatsapp.js")
+const { buildConfirmationMessage, buildWhatsappLink, buildNewRequestMessage, buildNewRequestLink } =
+  await import("./whatsapp.js")
 const { generatePublicReference, generateUniquePublicReference } = await import(
   "./public-reference.js"
 )
@@ -120,5 +121,73 @@ describe("valor cobrado", () => {
     // A função só aceita o preço congelado da reserva. Não há parâmetro de
     // valor, então não há por onde o cliente influenciar quanto se cobra.
     assert.equal(paymentAmountCents.length, 1)
+  })
+})
+
+describe("aviso de nova solicitação à barbearia", () => {
+  const request = {
+    serviceName: "Corte + Barba",
+    date: "2026-09-29",
+    startsAtClock: "09:00",
+    endsAtClock: "09:40",
+    reference: "EC-7F3K2Q",
+    customerName: "Guilherme Santana",
+  }
+
+  it("traz cliente, serviço, data, horário completo, status e referência", () => {
+    const message = buildNewRequestMessage(request)
+    assert.ok(message.startsWith("🔔 Nova solicitação de agendamento — ErickCorttes"))
+    assert.ok(message.includes("Cliente: Guilherme Santana"))
+    assert.ok(message.includes("Serviço: Corte + Barba"))
+    assert.ok(message.includes("Data: 29/09/2026"), "data em DD/MM/AAAA")
+    assert.ok(message.includes("Horário: 09:00 às 09:40"), "início E fim")
+    assert.ok(message.includes("Status: Aguardando confirmação"))
+    assert.ok(message.includes("Referência: EC-7F3K2Q"))
+    assert.ok(message.includes("aguardando análise no painel administrativo"))
+  })
+
+  it("nunca diz que o agendamento está confirmado", () => {
+    // O pedido ainda é PENDING. Dizer "confirmado" aqui seria mentira, e é o
+    // tipo de mentira que faz a pessoa aparecer num horário que não tem.
+    const message = buildNewRequestMessage(request)
+    assert.doesNotMatch(message, /agendamento confirmado|pagamento confirmado/i)
+    assert.match(message, /Aguardando confirmação/)
+  })
+
+  it("funciona sem o nome do cliente", () => {
+    const { customerName, ...anonymous } = request
+    const message = buildNewRequestMessage(anonymous)
+    assert.ok(!message.includes("Cliente:"))
+    assert.ok(message.includes("Referência: EC-7F3K2Q"))
+  })
+
+  it("não carrega identificador interno nem segredo", () => {
+    // A referência pública existe justamente para ocupar este lugar.
+    const message = buildNewRequestMessage(request)
+    assert.doesNotMatch(message, /token|handle|bearer|eyJ|secret|senha|password|pix/i)
+    assert.doesNotMatch(message, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i, "nenhum UUID")
+    assert.doesNotMatch(message, /00020101/, "nenhum BR Code")
+  })
+
+  it("aponta para o número da barbearia, com a mensagem codificada", () => {
+    const url = buildNewRequestLink(request)!
+    assert.ok(url.startsWith("https://wa.me/5571999990000?text="), url.slice(0, 48))
+    const encoded = url.split("?text=")[1]!
+    assert.ok(!encoded.includes(" "), "sem espaço cru")
+    assert.ok(!encoded.includes("\n"), "sem quebra de linha crua")
+    assert.ok(encoded.includes("%0A"), "quebra codificada")
+    // E a volta é exatamente a mensagem, com emoji e acento intactos.
+    const back = decodeURIComponent(encoded)
+    assert.equal(back, buildNewRequestMessage(request))
+    assert.ok(back.includes("🔔"))
+    assert.ok(back.includes("Serviço"))
+    assert.ok(back.includes("às"))
+  })
+
+  it("o telefone do cliente nunca define o destinatário", () => {
+    // Não há parâmetro de destinatário: o único número que entra vem do
+    // ambiente. Mesmo um nome que pareça telefone não desvia a conversa.
+    const url = buildNewRequestLink({ ...request, customerName: "+5511888887777" })!
+    assert.ok(url.startsWith("https://wa.me/5571999990000?"), "destino inalterado")
   })
 })

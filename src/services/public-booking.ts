@@ -26,6 +26,16 @@ export interface BookingRequestResult {
   awaitingApproval: boolean
   /** Por quanto tempo o horário fica segurado enquanto pendente. */
   pendingTtlMinutes: number
+  /** Referência pública curta ("EC-7F3K2Q"), para a pessoa citar. */
+  reference: string | null
+  /**
+   * Link pronto para avisar a barbearia da nova solicitação.
+   *
+   * Montado no servidor: o destino vem de BARBERSHOP_WHATSAPP_NUMBER e a
+   * mensagem, do banco. Vem nulo sem número configurado — aí o botão não
+   * aparece, em vez de levar a um endereço inválido.
+   */
+  notifyUrl: string | null
 }
 
 export async function requestBooking(
@@ -98,6 +108,8 @@ export interface BookingRequestView {
   pix: PixView | null
   /** "Falar com a barbearia" durante o pagamento. Não afirma confirmação. */
   paymentHelpUrl: string | null
+  /** "Avisar a barbearia" enquanto a solicitação aguarda análise. */
+  notifyUrl: string | null
 }
 
 export async function getBookingRequest(
@@ -157,6 +169,11 @@ export interface BookingPolicy {
   paymentWindowMinutes: number
   /** Como o pagamento é recebido nesta instalação. */
   paymentMethod: 'DYNAMIC_PROVIDER_PIX' | 'STATIC_PIX' | 'NONE'
+  /**
+   * WhatsApp da barbearia em E.164, para os contatos genéricos da interface.
+   * Nulo quando não configurado — aí o contato não é oferecido.
+   */
+  barbershopWhatsapp: string | null
 }
 
 /**

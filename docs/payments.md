@@ -295,3 +295,34 @@ O servidor continua aceitando a conciliação enquanto a reserva não tiver sido
 tomada — e recusa com conflito quando tiver, porque a varredura já a expirou.
 Nunca há double booking: a `EXCLUDE` cobre `AWAITING_PAYMENT` até a expiração
 efetiva.
+
+## Aviso de nova solicitação
+
+Depois de solicitar, a tela oferece **"Avisar a barbearia no WhatsApp"** — e o
+mesmo botão reaparece no acompanhamento enquanto o pedido está `PENDING`, para
+quem fecha a aba e volta pelo link.
+
+O link vem pronto do backend em `notifyUrl`: destino de
+`BARBERSHOP_WHATSAPP_NUMBER`, mensagem montada a partir do banco. Sem número
+configurado ele vem nulo e o botão não aparece — nunca um `wa.me/undefined`.
+
+Abrir é **ação explícita da pessoa**. Nada é aberto sozinho ao criar a reserva:
+o navegador bloquearia o popup e tiraria o cliente da confirmação que acabou de
+receber. E abrir o WhatsApp é só comunicação — não aprova, não confirma, não
+consome token e não toca no agendamento, que segue `PENDING` até a barbearia
+decidir no painel. Por isso a mensagem diz "Status: Aguardando confirmação".
+
+### A referência nasce com a reserva
+
+`publicReference` deixou de ser criada apenas na aprovação e passa a existir
+desde a criação do agendamento.
+
+O motivo é este aviso: um pedido pendente não tinha identificador nenhum que
+pudesse circular, e o cliente que quisesse falar sobre o próprio pedido teria de
+citar o `publicToken` — que é credencial de consulta e não pode sair do aparelho
+dele. A referência não é credencial: não abre consulta, não substitui o token, e
+saber uma não dá acesso a nada.
+
+Ela é **estável** da criação até o fim: aprovar não sorteia outra, e um pedido
+recusado a mantém, de modo que o histórico continua identificável dos dois lados
+do balcão.

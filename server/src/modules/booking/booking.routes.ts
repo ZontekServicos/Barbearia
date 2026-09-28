@@ -19,7 +19,7 @@ import {
   publicRequestLookupRateLimit,
 } from "../../middlewares/rate-limit.js"
 import { processPaymentWebhook } from "../payment/payment.service.js"
-import { paymentMethod, paymentsEnabled } from "../../config/env.js"
+import { env, paymentMethod, paymentsEnabled } from "../../config/env.js"
 import type { RequestWithRawBody } from "../../app.js"
 import {
   getPublicRequest,
@@ -161,6 +161,10 @@ bookingRouter.post(
         publicToken: result.publicToken,
         awaitingApproval: result.awaitingApproval,
         pendingTtlMinutes: BookingRules.pendingRequestTtlMinutes,
+        reference: result.reference,
+        // Link para avisar a barbearia. Montado no servidor: o destino vem da
+        // configuração e a mensagem, do banco.
+        notifyUrl: result.notifyUrl,
       },
       201,
     )
@@ -243,6 +247,15 @@ bookingRouter.get("/policy", async (_req, res) => {
      * específico, e lá eles vêm junto da cobrança.
      */
     paymentMethod,
+    /**
+     * WhatsApp da barbearia, para os contatos que NAO pertencem a um pedido:
+     * o rodape da landing e a tela de conta bloqueada.
+     *
+     * Publico por natureza — e o numero que a barbearia divulga. Servido daqui
+     * para existir UM lugar com ele: trocar a variavel troca o numero em toda a
+     * aplicacao, sem caçar literais em componentes.
+     */
+    barbershopWhatsapp: env.BARBERSHOP_WHATSAPP_NUMBER ?? null,
   })
 })
 

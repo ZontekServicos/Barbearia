@@ -104,3 +104,52 @@ export function buildPaymentHelpLink(data: WhatsappConfirmation): string | null 
   const digits = number.replace(/[^0-9]/g, "")
   return `https://wa.me/${digits}?text=${encodeURIComponent(buildPaymentHelpMessage(data))}`
 }
+
+/**
+ * Aviso à barbearia de que existe uma nova solicitação aguardando análise.
+ *
+ * Quem abre é o CLIENTE, logo depois de solicitar — daí o destinatário ser a
+ * barbearia e o texto estar escrito da perspectiva de quem chega com um pedido.
+ *
+ * Abrir este link é comunicação e nada mais: não aprova, não confirma, não
+ * consome token e não toca no agendamento. O estado continua PENDING até a
+ * barbearia decidir no painel. É por isso que a mensagem diz "Aguardando
+ * confirmação" e jamais "confirmado".
+ *
+ * A referência pública é o único identificador aqui. Ela existe desde a criação
+ * da reserva justamente para ocupar este lugar: identifica o pedido no balcão
+ * sem dar acesso a ele, diferente do publicToken.
+ */
+export function buildNewRequestMessage(
+  data: WhatsappConfirmation & { endsAtClock: string; customerName?: string },
+): string {
+  const [year, month, day] = data.date.split("-")
+  const lines = [
+    "🔔 Nova solicitação de agendamento — ErickCorttes",
+    "",
+    ...(data.customerName ? [`Cliente: ${data.customerName}`] : []),
+    `Serviço: ${data.serviceName}`,
+    `Data: ${day}/${month}/${year}`,
+    `Horário: ${data.startsAtClock} às ${data.endsAtClock}`,
+    "Status: Aguardando confirmação",
+    `Referência: ${data.reference}`,
+    "",
+    "Uma nova solicitação está aguardando análise no painel administrativo.",
+  ]
+  return lines.join("\n")
+}
+
+/**
+ * Link do aviso de nova solicitação.
+ *
+ * `null` sem número configurado — assim a tela esconde o botão em vez de
+ * oferecer um `wa.me/undefined` que não leva a lugar nenhum.
+ */
+export function buildNewRequestLink(
+  data: WhatsappConfirmation & { endsAtClock: string; customerName?: string },
+): string | null {
+  const number = env.BARBERSHOP_WHATSAPP_NUMBER
+  if (!number) return null
+  const digits = number.replace(/[^0-9]/g, "")
+  return `https://wa.me/${digits}?text=${encodeURIComponent(buildNewRequestMessage(data))}`
+}

@@ -7,6 +7,8 @@ import ClientLayout from '../../src/components/layouts/ClientLayout'
 import Schedule from '../../src/pages/client/Schedule'
 import BookingStatus from '../../src/pages/client/BookingStatus'
 import AppointmentDetail from '../../src/pages/admin/AppointmentDetail'
+import Landing from '../../src/pages/Landing'
+import { AccountBlocked } from '../../src/pages/client/AccountStatus'
 import '../../src/index.css'
 
 const root = createRoot(document.getElementById('root')!)
@@ -15,6 +17,15 @@ const routeToken = new URLSearchParams(location.search).get('token')
 function render() {
   // 'status-route' monta a rota real /agendamento/:token para provar que o
   // token vem da URL — é assim que alguém volta dias depois pelo link.
+  // Telas que buscam o WhatsApp da barbearia na política do servidor.
+  if (page === 'landing') {
+    root.render(<BrowserRouter><AuthProvider><Landing /></AuthProvider></BrowserRouter>)
+    return
+  }
+  if (page === 'blocked') {
+    root.render(<BrowserRouter><AuthProvider><main className="p-4"><AccountBlocked /></main></AuthProvider></BrowserRouter>)
+    return
+  }
   // Detalhe administrativo do agendamento: precisa da rota real para o :id.
   if (page === 'appointment') {
     root.render(<MemoryRouter initialEntries={['/admin/agenda/' + routeToken]}><AuthProvider>

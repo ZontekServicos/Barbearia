@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { useBarbershopWhatsapp } from "@/hooks/useBarbershopWhatsapp"
 import {
   ArrowRight, Scissors, Clock, MapPin,
   Phone, ChevronRight, AtSign,
@@ -20,6 +21,7 @@ const WEEKDAY_NAMES = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sext
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
 
 export default function Landing() {
+  const whatsapp = useBarbershopWhatsapp()
   const [services, setServices] = useState<Service[] | null>(null)
   const [week, setWeek] = useState<BusinessHoursDay[] | null>(null)
 
@@ -257,7 +259,7 @@ export default function Landing() {
               </div>
 
               <a
-                href="https://wa.me/5571999990000"
+                href={whatsapp.url ?? undefined}
                 className="flex items-center gap-3 group"
               >
                 <div className="w-9 h-9 rounded-lg bg-[var(--secondary)] flex items-center justify-center shrink-0">
@@ -265,7 +267,9 @@ export default function Landing() {
                 </div>
                 <div>
                   <p className="font-medium text-sm">WhatsApp</p>
-                  <p className="text-[var(--muted-foreground)] text-sm group-hover:text-[var(--primary)] transition-colors">(71) 99999-0000</p>
+                  <p className="text-[var(--muted-foreground)] text-sm group-hover:text-[var(--primary)] transition-colors">
+                    {whatsapp.display ?? "Em breve"}
+                  </p>
                 </div>
               </a>
 

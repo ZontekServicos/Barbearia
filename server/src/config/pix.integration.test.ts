@@ -586,8 +586,10 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     // Antes de aprovar não há cobrança nenhuma.
     const pending = await call(`/admin/appointments/${appointmentId}`, { access })
     assert.equal(pending.status, 200)
-    assert.equal(pending.body.data.appointment.payment, null)
-    assert.equal(pending.body.data.appointment.reference, null)
+    assert.equal(pending.body.data.appointment.payment, null, "sem aprovação, sem cobrança")
+    // A referência já existe: é ela que liga o aviso recebido no WhatsApp ao
+    // pedido na agenda, antes mesmo de aprovar.
+    assert.match(pending.body.data.appointment.reference, /^EC-/)
 
     await approve(access, appointmentId)
     const detail = await call(`/admin/appointments/${appointmentId}`, { access })

@@ -927,18 +927,19 @@ describe("Confirmação mediante pagamento — PostgreSQL real", { skip: !enable
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await requestBooking({ serviceId: service.id })
-    assert.equal(
-      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).publicReference,
-      null,
-      "PENDING nasce sem referência",
-    )
+    // A referência nasce COM a reserva, ainda em PENDING: é o identificador que
+    // o cliente cita ao falar com a barbearia antes de qualquer aprovação.
+    const atCreation = (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } }))
+      .publicReference
+    assert.match(atCreation!, /^EC-[23456789ABCDEFGHJKLMNPQRTUVWXYZ]{6}$/)
 
     // Duas aprovações simultâneas: uma vence, uma cobrança, uma referência.
     const results = await Promise.all([approve(access, appointmentId), approve(access, appointmentId)])
     assert.equal(results.filter(r => r.status === 200).length, 1)
     assert.equal(await prisma.payment.count(), 1, "nunca duas cobranças")
     const first = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
-    assert.match(first.publicReference!, /^EC-[23456789ABCDEFGHJKLMNPQRTUVWXYZ]{6}$/)
+    // Aprovar não sorteia outra: a reserva já tinha a sua.
+    assert.equal(first.publicReference, atCreation, "a referência não muda na aprovação")
 
     // Reabrir e aprovar de novo reutiliza a MESMA referência: a reserva é
     // idempotente, então uma retentativa não abre cobrança com outra referência.

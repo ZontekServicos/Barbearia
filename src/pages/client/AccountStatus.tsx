@@ -1,4 +1,5 @@
 import { Link, Navigate, useNavigate } from "react-router-dom"
+import { useBarbershopWhatsapp } from "@/hooks/useBarbershopWhatsapp"
 import { Clock, ShieldAlert, RefreshCw, LogOut } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -144,6 +145,7 @@ export function PendingApproval() {
 
 /** Conta bloqueada pela administração. */
 export function AccountBlocked() {
+  const whatsapp = useBarbershopWhatsapp()
   const { signOut } = useAuth()
   const navigate = useNavigate()
 
@@ -158,9 +160,14 @@ export function AccountBlocked() {
       </p>
 
       <div className="space-y-2">
-        <Button className="w-full h-11" asChild>
-          <a href="https://wa.me/5571999990000">Falar com a barbearia</a>
-        </Button>
+        {/* Sem número configurado, o contato simplesmente não é oferecido. */}
+        {whatsapp.url && (
+          <Button className="w-full h-11" asChild>
+            <a href={whatsapp.url} target="_blank" rel="noopener noreferrer">
+              Falar com a barbearia
+            </a>
+          </Button>
+        )}
         <button
           onClick={() =>
             void signOut()

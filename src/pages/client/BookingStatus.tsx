@@ -161,6 +161,25 @@ export default function BookingStatus() {
       {view.appointment.status === 'CONFIRMED' && <Confirmed view={view} />}
 
       <div className="space-y-3 pt-2">
+        {/*
+          Avisar a barbearia, enquanto o pedido aguarda análise.
+          Repetido aqui, e não só na tela de sucesso, porque quem fecha a aba e
+          volta pelo link precisa reencontrar a mesma ação — sem isto o aviso só
+          existiria no instante seguinte à criação.
+        */}
+        {view.appointment.status === 'PENDING' && view.notifyUrl && (
+          <>
+            <p className="text-sm text-center text-[var(--muted-foreground)]">
+              Avise a barbearia para que sua solicitação seja analisada.
+            </p>
+            <Button className="w-full h-11" asChild>
+              <a href={view.notifyUrl} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="h-4 w-4 mr-2" />
+                Avisar a barbearia no WhatsApp
+              </a>
+            </Button>
+          </>
+        )}
         {watching && (
           <Button
             variant="outline"

@@ -11,7 +11,7 @@ import { CONTACT_HANDLE_TTL_MS, invalidContactHandle, issueContactHandle, readCo
 import { takeContactRegistrationQuota } from "./public-quota.js"
 import { maskPhoneForDisplay } from "../../utils/phone.js"
 import { toPublicPayment, type PublicPayment } from "../payment/payment.service.js"
-import { buildPaymentHelpLink, buildWhatsappLink } from "./whatsapp.js"
+import { buildNewRequestLink, buildPaymentHelpLink, buildWhatsappLink } from "./whatsapp.js"
 import { buildPixPresentation, type PixPresentation } from "../payment/pix/pix.service.js"
 
 /**
@@ -80,6 +80,13 @@ export interface PublicRequestView {
    * confirmação: este não afirma que o agendamento está confirmado.
    */
   paymentHelpUrl: string | null
+  /**
+   * Link para avisar a barbearia da solicitação, enquanto ela aguarda análise.
+   *
+   * Quem fecha a aba e volta depois reencontra o mesmo botão — sem ele, o aviso
+   * só existiria no instante seguinte à criação.
+   */
+  notifyUrl: string | null
 }
 
 export interface BookingRequestResult {
@@ -88,6 +95,15 @@ export interface BookingRequestResult {
   publicToken: string
   /** `true` quando ainda depende do barbeiro. */
   awaitingApproval: boolean
+  /** Referência pública curta, para a pessoa citar ao falar com a barbearia. */
+  reference: string | null
+  /**
+   * Link para avisar a barbearia da nova solicitação.
+   *
+   * `null` sem número configurado — a tela esconde o botão em vez de oferecer
+   * um endereço que não leva a lugar nenhum.
+   */
+  notifyUrl: string | null
 }
 
 /**
@@ -260,10 +276,37 @@ export async function requestPublicAppointment(
     status: placed.appointment.status,
   })
 
+  // O nome vem do CADASTRO, não do que foi digitado agora: é quem a barbearia
+  // tem no sistema, e é esse nome que ela vai procurar no painel.
+  const [contact, stored] = await Promise.all([
+    prisma.user.findUnique({ where: { id: contactId }, select: { fullName: true } }),
+    prisma.appointment.findUnique({
+      where: { id: placed.appointment.id },
+      select: { publicReference: true },
+    }),
+  ])
+  const reference = stored?.publicReference ?? null
+
   return {
     appointment: placed.appointment,
     publicToken: placed.publicToken!,
     awaitingApproval: placed.appointment.status === "PENDING",
+    reference,
+    /**
+     * Só enquanto o pedido aguarda a barbearia. Confirmado na hora — instalação
+     * sem aprovação — não há o que avisar, e o link de confirmação é outro.
+     */
+    notifyUrl:
+      placed.appointment.status === "PENDING" && reference
+        ? buildNewRequestLink({
+            serviceName: placed.appointment.serviceName,
+            date: placed.appointment.date,
+            startsAtClock: placed.appointment.startsAtClock,
+            endsAtClock: placed.appointment.endsAtClock,
+            reference,
+            ...(contact?.fullName ? { customerName: contact.fullName } : {}),
+          })
+        : null,
   }
 }
 
@@ -347,6 +390,14 @@ export async function getPublicRequest(
         ? await buildPixPresentation(appointment.payment, appointment.publicReference)
         : null,
     paymentHelpUrl: awaitingPayment && whatsappData ? buildPaymentHelpLink(whatsappData) : null,
+    notifyUrl:
+      view.status === "PENDING" && whatsappData
+        ? buildNewRequestLink({
+            ...whatsappData,
+            endsAtClock: view.endsAtClock,
+            ...(appointment.user.fullName ? { customerName: appointment.user.fullName } : {}),
+          })
+        : null,
   }
 }
 

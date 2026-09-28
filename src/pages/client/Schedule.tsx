@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft, Check, Scissors, Clock, Phone, User, Hourglass,
-  CalendarCheck, ChevronLeft, ChevronRight, AlertCircle, RefreshCw
+  CalendarCheck, ChevronLeft, ChevronRight, AlertCircle, RefreshCw, MessageCircle
 } from 'lucide-react'
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
@@ -744,6 +744,11 @@ function SuccessStep({
                 Acompanhe por aqui.
               </p>
             )}
+            {result.notifyUrl && (
+              <p className="text-sm text-[var(--foreground)] mt-2">
+                Avise a barbearia para que sua solicitação seja analisada.
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -762,12 +767,31 @@ function SuccessStep({
           aprovação, o pagamento e a confirmação aparecem. O token vai na URL
           para o link continuar valendo em outro dispositivo.
         */}
-        <Button className="w-full h-11" asChild>
+        {/*
+          Avisar a barbearia.
+          Só aparece com número configurado — o servidor devolve o link pronto
+          ou nulo, então não há como montar um wa.me inválido aqui.
+
+          Abre por clique explícito, nunca sozinho: abertura automática é
+          bloqueada por popup no navegador e tiraria a pessoa da confirmação
+          que ela acabou de receber. E abrir o WhatsApp não muda nada no
+          agendamento — ele continua aguardando a barbearia.
+        */}
+        {result.notifyUrl && (
+          <Button className="w-full h-11" asChild>
+            <a href={result.notifyUrl} target="_blank" rel="noopener noreferrer">
+              <MessageCircle className="h-4 w-4 mr-2" />
+              Avisar a barbearia no WhatsApp
+            </a>
+          </Button>
+        )}
+
+        <Button variant={result.notifyUrl ? 'outline' : 'default'} className="w-full h-11" asChild>
           <a href={`/agendamento/${encodeURIComponent(result.publicToken)}`}>
             Acompanhar meu agendamento
           </a>
         </Button>
-        <Button variant="outline" className="w-full h-11" onClick={onRestart}>
+        <Button variant="ghost" className="w-full h-11" onClick={onRestart}>
           Fazer outro agendamento
         </Button>
         <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" asChild>

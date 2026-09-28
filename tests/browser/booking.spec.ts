@@ -1299,3 +1299,282 @@ test('agenda admin: cinco estados distintos, aviso de Pix so onde ha Pix manual'
   const text = await page.locator('main').innerText()
   expect(text).not.toMatch(/static-pix|providerPaymentId|paymentId/)
 })
+
+// ---------------------------------------------------------------------------
+// CTA "Avisar a barbearia no WhatsApp" na tela de solicitação enviada
+// ---------------------------------------------------------------------------
+
+const NOTIFY_MESSAGE = [
+  '🔔 Nova solicitação de agendamento — ErickCorttes',
+  '',
+  'Cliente: Cliente QA',
+  'Serviço: Corte',
+  'Data: 25/09/2026',
+  'Horário: 09:00 às 09:30',
+  'Status: Aguardando confirmação',
+  'Referência: EC-7F3K2Q',
+  '',
+  'Uma nova solicitação está aguardando análise no painel administrativo.',
+].join('\n')
+const NOTIFY_URL = 'https://wa.me/5571988887777?text=' + encodeURIComponent(NOTIFY_MESSAGE)
+
+/** Leva o fluxo público até a criação da solicitação. */
+async function submitRequest(page: Page, notifyUrl: string | null) {
+  await page.route('**/api/booking/availability?**', route =>
+    ok(route, { slots: [slot('09:00'), slot('09:40')], reason: null }))
+  await page.route('**/api/booking/requests', route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    return route.fulfill({
+      status: 201,
+      json: {
+        success: true,
+        data: {
+          appointment: {
+            id: '77777777-7777-4777-8777-777777777777',
+            ...slot('09:00'),
+            date: '2026-09-25',
+            startsAt: '2026-09-25T09:00:00-03:00',
+            serviceId: service30.id,
+            serviceName: 'Corte',
+            servicePriceCents: 3500,
+            servicePriceFormatted: '35,00',
+            durationMinutes: 30,
+            status: 'PENDING',
+            notes: null,
+            createdAt: '2026-09-24T00:00:00Z',
+            cancelledAt: null,
+          },
+          publicToken: TOKEN,
+          awaitingApproval: true,
+          pendingTtlMinutes: 120,
+          reference: 'EC-7F3K2Q',
+          notifyUrl,
+        },
+      },
+    })
+  })
+  await open(page, 'schedule')
+  await fillContact(page)
+  await chooseService(page)
+  await chooseDate(page)
+  await page.getByRole('button', { name: '09:00', exact: true }).click()
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click()
+  await page.getByRole('button', { name: 'Solicitar agendamento', exact: true }).click()
+}
+
+test('solicitacao enviada: CTA de aviso aparece entre o aviso e "Fazer outro"', async ({ page }) => {
+  await setup(page)
+  await submitRequest(page, NOTIFY_URL)
+
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+  // Continua dizendo que NAO esta confirmado.
+  await expect(page.getByText('Ainda não está confirmado')).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Agendamento confirmado/ })).toHaveCount(0)
+
+  // Frase discreta + CTA.
+  await expect(page.getByText('Avise a barbearia para que sua solicitação seja analisada.')).toBeVisible()
+  const cta = page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })
+  await expect(cta).toBeVisible()
+  await expect(cta).toHaveAttribute('href', NOTIFY_URL)
+  await expect(cta).toHaveAttribute('target', '_blank')
+  await expect(cta).toHaveAttribute('rel', /noopener/)
+
+  // Ordem na tela: aviso -> CTA -> Fazer outro agendamento.
+  const order = await page.locator('main').evaluate(node => {
+    const text = (node as HTMLElement).innerText
+    return {
+      aviso: text.indexOf('Ainda não está confirmado'),
+      cta: text.indexOf('Avisar a barbearia no WhatsApp'),
+      outro: text.indexOf('Fazer outro agendamento'),
+    }
+  })
+  expect(order.aviso).toBeLessThan(order.cta)
+  expect(order.cta).toBeLessThan(order.outro)
+})
+
+test('solicitacao enviada: a mensagem do link traz os dados reais e nenhum segredo', async ({ page }) => {
+  await setup(page)
+  await submitRequest(page, NOTIFY_URL)
+
+  const href = (await page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ }).getAttribute('href'))!
+  expect(href.startsWith('https://wa.me/5571988887777?text=')).toBe(true)
+  const message = decodeURIComponent(href.split('?text=')[1]!)
+
+  expect(message).toContain('Cliente: Cliente QA')
+  expect(message).toContain('Serviço: Corte')
+  expect(message).toContain('Data: 25/09/2026')
+  expect(message).toContain('Horário: 09:00 às 09:30')
+  expect(message).toContain('Status: Aguardando confirmação')
+  expect(message).toContain('Referência: EC-7F3K2Q')
+  expect(message).not.toMatch(/agendamento confirmado/i)
+
+  // Nada de credencial ou id interno.
+  expect(message).not.toContain(TOKEN)
+  expect(message).not.toContain('77777777-7777-4777-8777-777777777777')
+  expect(message).not.toContain(service30.id)
+  expect(message).not.toMatch(/eyJ|Bearer|v2\.|secret|00020101/i)
+  // E o telefone do cliente nao vira destinatario.
+  expect(href).not.toContain('71988881234')
+})
+
+test('solicitacao enviada: abrir o WhatsApp e acao do usuario, nunca automatica', async ({ page }) => {
+  await setup(page)
+  // Qualquer tentativa de abrir sozinho seria visivel aqui.
+  await page.addInitScript(() => {
+    ;(window as any).auditOpens = []
+    const original = window.open
+    window.open = ((...args: unknown[]) => {
+      ;(window as any).auditOpens.push(String(args[0]))
+      return original.apply(window, args as never)
+    }) as typeof window.open
+  })
+  await submitRequest(page, NOTIFY_URL)
+  await expect(page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })).toBeVisible()
+
+  // Nada foi aberto, e a navegacao continua na tela de sucesso.
+  expect(await page.evaluate(() => (window as any).auditOpens)).toEqual([])
+  expect(page.url()).toContain('fixture.html')
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+})
+
+test('solicitacao enviada: sem numero configurado o CTA nao aparece', async ({ page }) => {
+  await setup(page)
+  await submitRequest(page, null)
+
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })).toHaveCount(0)
+  await expect(page.getByText('Avise a barbearia para que sua solicitação seja analisada.')).toHaveCount(0)
+  // E nenhum link invalido foi gerado.
+  const hrefs = await page.locator('main a').evaluateAll(nodes => nodes.map(n => (n as HTMLAnchorElement).getAttribute('href')))
+  expect(hrefs.some(h => (h ?? '').includes('wa.me/undefined') || (h ?? '').includes('wa.me/?'))).toBe(false)
+  // A tela segue utilizavel.
+  await expect(page.getByRole('link', { name: 'Acompanhar meu agendamento' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Fazer outro agendamento' })).toBeVisible()
+})
+
+test('acompanhamento PENDING tambem oferece avisar a barbearia', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: null,
+    whatsappUrl: null,
+    pix: null,
+    paymentHelpUrl: null,
+    notifyUrl: NOTIFY_URL,
+  })
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })).toHaveAttribute('href', NOTIFY_URL)
+  // Continua sem oferecer confirmacao.
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toHaveCount(0)
+})
+
+test('acompanhamento CONFIRMED nao oferece mais o aviso', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('CONFIRMED'),
+    reference: 'EC-7F3K2Q',
+    payment: null,
+    whatsappUrl: 'https://wa.me/5571988887777?text=ok',
+    pix: null,
+    paymentHelpUrl: null,
+    notifyUrl: null,
+  })
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /Confirmar pelo WhatsApp/ })).toBeVisible()
+})
+
+for (const width of [360, 375, 390, 412, 430]) {
+  test('CTA de aviso mobile ' + width + ': cabe, alvo >=44px e espacamento', async ({ page }) => {
+    await setup(page)
+    await page.setViewportSize({ width, height: 900 })
+    await submitRequest(page, NOTIFY_URL)
+
+    const cta = page.getByRole('link', { name: /Avisar a barbearia no WhatsApp/ })
+    await expect(cta).toBeVisible()
+    const box = (await cta.boundingBox())!
+    expect(box.height).toBeGreaterThanOrEqual(44)
+    expect(box.width).toBeLessThanOrEqual(width)
+    // Espacamento com o botao seguinte.
+    const next = (await page.getByRole('link', { name: 'Acompanhar meu agendamento' }).boundingBox())!
+    expect(next.y - (box.y + box.height)).toBeGreaterThanOrEqual(8)
+    await noOverflow(page)
+    await touchTargets(page)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// §14 — trocar BARBERSHOP_WHATSAPP_NUMBER troca o destino em TODA a aplicação
+// ---------------------------------------------------------------------------
+
+/** Serve a política com um número escolhido pelo teste. */
+async function policyWith(page: Page, barbershopWhatsapp: string | null) {
+  await page.route('**/api/booking/policy', route => ok(route, {
+    requiresApproval: true,
+    baseSlotMinutes: 40,
+    pendingTtlMinutes: 120,
+    minimumAdvanceMinutes: 60,
+    paymentRequired: false,
+    paymentWindowMinutes: 15,
+    paymentMethod: 'NONE',
+    barbershopWhatsapp,
+  }))
+}
+
+// Número deliberadamente diferente do que existia escrito no código.
+const TROCADO = '+5511912345678'
+const TROCADO_DIGITS = '5511912345678'
+
+test('landing: WhatsApp vem da configuracao, nao do codigo', async ({ page }) => {
+  await setup(page)
+  await policyWith(page, TROCADO)
+  await open(page, 'landing')
+
+  const link = page.locator('a[href*="wa.me"]').first()
+  await expect(link).toHaveAttribute('href', 'https://wa.me/' + TROCADO_DIGITS)
+  // O numero que estava escrito no JSX nao pode reaparecer.
+  const html = await page.content()
+  expect(html).not.toContain('5571999990000')
+  expect(html).not.toContain('(71) 99999-0000')
+  // E o texto exibido acompanha a configuracao.
+  await expect(page.getByText('(11) 91234-5678')).toBeVisible()
+})
+
+test('conta bloqueada: WhatsApp vem da configuracao', async ({ page }) => {
+  await setup(page)
+  await policyWith(page, TROCADO)
+  await open(page, 'blocked')
+
+  const link = page.getByRole('link', { name: 'Falar com a barbearia' })
+  await expect(link).toHaveAttribute('href', 'https://wa.me/' + TROCADO_DIGITS)
+  await expect(link).toHaveAttribute('target', '_blank')
+  const html = await page.content()
+  expect(html).not.toContain('5571999990000')
+})
+
+test('landing: sem numero configurado nao gera link invalido', async ({ page }) => {
+  await setup(page)
+  await policyWith(page, null)
+  await open(page, 'landing')
+
+  // A pagina continua funcionando.
+  await expect(page.locator('body')).toBeVisible()
+  const hrefs = await page.locator('a').evaluateAll(nodes =>
+    nodes.map(n => (n as HTMLAnchorElement).getAttribute('href')))
+  expect(hrefs.some(h => (h ?? '').includes('wa.me/undefined'))).toBe(false)
+  expect(hrefs.some(h => (h ?? '').includes('wa.me/null'))).toBe(false)
+  expect(hrefs.some(h => (h ?? '') === 'https://wa.me/')).toBe(false)
+  // Sem numero, o contato nao e anunciado.
+  await expect(page.getByText('(71) 99999-0000')).toHaveCount(0)
+})
+
+test('conta bloqueada: sem numero o contato nao e oferecido', async ({ page }) => {
+  await setup(page)
+  await policyWith(page, null)
+  await open(page, 'blocked')
+
+  await expect(page.getByRole('link', { name: 'Falar com a barbearia' })).toHaveCount(0)
+  // A tela segue utilizavel: a saida continua la.
+  await expect(page.getByRole('button', { name: /Sair|Voltar/ }).first()).toBeVisible()
+})
