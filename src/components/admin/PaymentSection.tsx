@@ -79,7 +79,9 @@ export default function PaymentSection({
       setNotice(
         decision === 'PAID'
           ? 'Pagamento confirmado. Agendamento confirmado.'
-          : 'Registrado como não identificado. O cliente ainda pode pagar dentro do prazo.',
+          : updated.status === 'EXPIRED'
+            ? 'Pagamento não localizado. O prazo terminou e o horário foi liberado.'
+            : 'Registrado como não identificado. O cliente ainda pode pagar dentro do prazo.',
       )
       onSettled(updated)
     } catch (err) {
@@ -123,11 +125,23 @@ export default function PaymentSection({
         tone,
       )}
     >
+      {/*
+        "PAGAMENTO INFORMADO" tem título próprio.
+
+        Tecnicamente o agendamento segue AWAITING_PAYMENT, mas para a barbearia
+        os dois estados são trabalhos diferentes: um é esperar o cliente, o outro
+        é conferir o extrato. Mostrá-los iguais faria o segundo passar batido.
+      */}
       <h2
         id="pagamento-heading"
-        className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-4"
+        className={cn(
+          'text-xs font-semibold tracking-widest uppercase mb-4',
+          payment.reportedAt && payment.status !== 'PAID'
+            ? 'text-[var(--primary)]'
+            : 'text-[var(--muted-foreground)]',
+        )}
       >
-        Pagamento
+        {payment.reportedAt && payment.status !== 'PAID' ? 'Pagamento informado' : 'Pagamento'}
       </h2>
 
       <dl className="space-y-3 mb-4">
@@ -143,9 +157,13 @@ export default function PaymentSection({
                 (payment.status === 'FAILED' || payment.windowClosed) && 'text-amber-400',
               )}
             >
-              {payment.windowClosed && payment.status === 'PENDING'
-                ? 'Prazo vencido'
-                : STATUS_TEXT[payment.status]}
+              {payment.reviewOverdue
+                ? 'Informado — conferência vencida'
+                : payment.windowClosed && payment.status === 'PENDING'
+                  ? 'Prazo vencido'
+                  : payment.reportedAt && payment.status === 'PENDING'
+                    ? 'Informado pelo cliente'
+                    : STATUS_TEXT[payment.status]}
             </span>
           }
         />
@@ -155,9 +173,30 @@ export default function PaymentSection({
             value={<span className="font-mono tracking-wide">{appointment.reference}</span>}
           />
         )}
+        {payment.reportedAt && (
+          <Row
+            label="Cliente informou"
+            value={
+              <span>
+                {new Date(payment.reportedAt).toLocaleString('pt-BR', {
+                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                })}
+              </span>
+            }
+          />
+        )}
+        {payment.reviewExpiresAt && (
+          <Row
+            label="Limite da conferência"
+            value={new Date(payment.reviewExpiresAt).toLocaleString('pt-BR', {
+              timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit',
+              hour: '2-digit', minute: '2-digit',
+            })}
+          />
+        )}
         {payment.status === 'PENDING' && !payment.windowClosed && (
           <Row
-            label="Prazo"
+            label={payment.reportedAt ? 'Prazo para conferir' : 'Prazo'}
             value={
               <span className="tabular-nums">
                 {remaining > 0 ? formatRemaining(remaining) : 'encerrando…'}
@@ -194,7 +233,9 @@ export default function PaymentSection({
       {payment.canConfirmManually && (
         <div className="space-y-2">
           <p className="text-sm text-[var(--muted-foreground)] mb-3">
-            Confira o recebimento no extrato da barbearia antes de confirmar.
+            {payment.reportedAt
+              ? 'O cliente informou que pagou. Confira o recebimento no extrato antes de confirmar.'
+              : 'Confira o recebimento no extrato da barbearia antes de confirmar.'}
           </p>
           <Button className="w-full h-11" onClick={() => setAsking('PAID')} disabled={pending}>
             <Check className="h-4 w-4 mr-2" />
@@ -207,7 +248,7 @@ export default function PaymentSection({
             disabled={pending}
           >
             <X className="h-4 w-4 mr-2" />
-            Pagamento não identificado
+            {payment.reportedAt ? 'Pagamento não localizado' : 'Pagamento não identificado'}
           </Button>
         </div>
       )}
@@ -216,10 +257,27 @@ export default function PaymentSection({
         Prazo vencido com cobrança em aberto.
         O botão normal sai da tela — confirmar num clique aqui poderia fechar um
         horário que já voltou a ser oferecido. Se o Pix realmente caiu, a
-        barbearia trata o caso por fora: o servidor ainda aceita a conciliação
-        enquanto o horário não tiver sido tomado, e recusa com conflito se tiver.
+        barbearia trata o caso por fora: o servidor recusa após o prazo vigente,
+        mesmo quando ainda não houve outra reserva.
       */}
-      {payment.status === 'PENDING' && payment.windowClosed && (
+      {/*
+        Declarado, prazo vencido e ninguém decidiu.
+
+        É o caso que não pode passar em silêncio: existe dinheiro possivelmente
+        recebido sem tratamento, e o horário já voltou para a agenda.
+      */}
+      {payment.reviewOverdue && (
+        <p className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-sm text-amber-100">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>
+            O cliente informou o Pix e o prazo de conferência venceu sem decisão.
+            Verifique o extrato: se o pagamento entrou, trate com o cliente — o
+            horário já voltou a ficar disponível.
+          </span>
+        </p>
+      )}
+
+      {!payment.reviewOverdue && payment.status === 'PENDING' && payment.windowClosed && (
         <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
           <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
           <span>

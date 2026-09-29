@@ -63,6 +63,10 @@ export interface PaymentView {
   checkoutUrl: string | null
   /** Pix copia-e-cola. Público por natureza. */
   pixQrCode: string | null
+  /** Quando o cliente declarou ter pago. Nulo = ainda não declarou. */
+  reportedAt: string | null
+  /** Prazo da barbearia para conferir. Nulo sem declaração. */
+  reviewExpiresAt: string | null
 }
 
 /**
@@ -117,6 +121,8 @@ export interface BookingRequestView {
    * disso, então o botão não aparece onde não faria sentido.
    */
   pixPaidUrl: string | null
+  /** Cliente já declarou o pagamento; a barbearia ainda não decidiu. */
+  paymentReported: boolean
 }
 
 export async function getBookingRequest(
@@ -218,4 +224,22 @@ export async function registerContact(
     signal: options.signal,
     skipRefresh: true,
   })
+}
+
+/**
+ * Registra que o cliente realizou o Pix.
+ *
+ * NÃO confirma nada: o pagamento segue pendente e o agendamento segue
+ * aguardando. O que muda é que o horário deixa de ser liberado pelo prazo de
+ * pagamento e passa a valer o prazo de conferência da barbearia.
+ *
+ * Idempotente no servidor — chamar de novo devolve a primeira declaração.
+ */
+export async function reportPixPayment(
+  token: string,
+): Promise<{ reportedAt: string; reviewExpiresAt: string }> {
+  return apiRequest<{ reportedAt: string; reviewExpiresAt: string }>(
+    `/booking/requests/${encodeURIComponent(token)}/payment-reported`,
+    { method: "POST", body: {}, skipRefresh: true },
+  )
 }

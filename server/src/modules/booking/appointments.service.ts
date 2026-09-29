@@ -168,21 +168,18 @@ export async function createAppointment(
       // (PENDING) e aguardando o pagamento (AWAITING_PAYMENT). Os dois usam
       // `pendingExpiresAt` como "até quando esta reserva vale", então a mesma
       // varredura serve para ambos.
-      const expired = await tx.appointment.findMany({
+      const expired = await tx.appointment.updateManyAndReturn({
         where: {
           status: { in: ["PENDING", "AWAITING_PAYMENT"] },
           pendingExpiresAt: { lte: now },
           startsAt: { lt: reservedEndsAt },
           reservedEndsAt: { gt: startsAt },
         },
+        data: { status: "EXPIRED", decidedAt: now },
         select: { id: true },
       })
       if (expired.length > 0) {
         const ids = expired.map(entry => entry.id)
-        await tx.appointment.updateMany({
-          where: { id: { in: ids } },
-          data: { status: "EXPIRED", decidedAt: now },
-        })
         // A cobrança morre com a reserva. Sem isto, um pagamento continuaria
         // PENDING apontando para um horário que já é de outra pessoa.
         await tx.payment.updateMany({
@@ -334,10 +331,10 @@ export async function listAgenda(
     where: {
       startsAt: { lt: rangeEnd },
       endsAt: { gt: rangeStart },
-      ...(status === "PENDING"
+      ...((status === "PENDING" || status === "AWAITING_PAYMENT")
         ? { status, pendingExpiresAt: { gt: new Date() } }
         : status === "EXPIRED"
-          ? { OR: [{ status: "EXPIRED" as const }, { status: "PENDING" as const, pendingExpiresAt: { lte: new Date() } }] }
+          ? { OR: [{ status: "EXPIRED" as const }, { status: { in: ["PENDING" as const, "AWAITING_PAYMENT" as const] }, pendingExpiresAt: { lte: new Date() } }] }
           : status ? { status } : {}),
     },
     orderBy: { startsAt: "asc" },
@@ -345,7 +342,12 @@ export async function listAgenda(
       user: { select: { id: true, fullName: true, phone: true } },
       // A cobrança acompanha o agendamento no painel: é por ela que a
       // barbearia sabe se falta pagar e se pode confirmar o recebimento.
-      payment: { select: { provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true } },
+      payment: {
+        select: {
+          provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true,
+          paymentReportedAt: true, reviewExpiresAt: true,
+        },
+      },
     },
     take: 500,
   })
@@ -360,7 +362,12 @@ export async function getAppointmentForAdmin(id: string): Promise<AdminAppointme
       user: { select: { id: true, fullName: true, phone: true } },
       // A cobrança acompanha o agendamento no painel: é por ela que a
       // barbearia sabe se falta pagar e se pode confirmar o recebimento.
-      payment: { select: { provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true } },
+      payment: {
+        select: {
+          provider: true, status: true, amountCents: true, expiresAt: true, paidAt: true,
+          paymentReportedAt: true, reviewExpiresAt: true,
+        },
+      },
     },
   })
 

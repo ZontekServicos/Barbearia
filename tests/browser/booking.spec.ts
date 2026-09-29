@@ -1646,42 +1646,37 @@ test('Pix manual: CTA "ja fiz o Pix" aparece abaixo da area Pix', async ({ page 
   await expect(page.getByRole('link', { name: /^Confirmar pelo WhatsApp/ })).toHaveCount(0)
 })
 
-test('Pix manual: clique explicito e repetido abre WhatsApp sem escrita na API', async ({ page, context }) => {
+
+test('Pix manual: clique registra uma vez antes de abrir WhatsApp sem opener', async ({ page, context }) => {
   await setup(page)
-  await context.route('https://wa.me/**', route => route.fulfill({ contentType: 'text/html', body: '<p>WhatsApp interceptado pelo teste</p>' }))
-  await page.addInitScript(() => {
-    const calls: unknown[][] = []
-    Object.assign(window, { pixOpenCalls: calls })
-    const original = window.open.bind(window)
-    window.open = (...args: Parameters<typeof window.open>) => {
-      calls.push(args)
-      return original(...args)
+  await context.route('https://wa.me/**', route => route.fulfill({ contentType: 'text/html', body: '<p>WhatsApp interceptado</p>' }))
+  let reported = false
+  let posts = 0
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().method() === 'POST') {
+      posts++
+      expect(route.request().postDataJSON()).toEqual({})
+      reported = true
+      return ok(route, { reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z' })
     }
+    return ok(route, reported
+      ? { ...payingView(staticPix), pix: null, pixPaidUrl: null, paymentReported: true, payment: reportedPayment() }
+      : payingView(staticPix))
   })
-  await openStatus(page, payingView(staticPix))
-  const cta = page.getByRole('button', { name: /Já fiz o Pix/ })
-  await expect(cta).toBeVisible()
-  const calls = () => page.evaluate(() => (window as any).pixOpenCalls)
-  expect(await calls()).toEqual([])
+  await page.addInitScript(token => localStorage.setItem('ec.booking.lastRequest', token), TOKEN)
+  await open(page, 'status')
   expect(context.pages()).toHaveLength(1)
-  const writes: string[] = []
-  page.on('request', request => {
-    if (request.url().includes('/api/') && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method())) {
-      writes.push(request.method() + ' ' + request.url())
-    }
-  })
-  for (let count = 1; count <= 3; count++) {
-    const opened = context.waitForEvent('page')
-    await cta.click()
-    const popup = await opened
-    await popup.waitForLoadState()
-    expect(await popup.evaluate(() => window.opener === null)).toBe(true)
-    expect(await calls()).toHaveLength(count)
-    expect((await calls())[count - 1]).toEqual([PAID_URL, '_blank', 'noopener,noreferrer'])
-    await popup.close()
-  }
-  expect(writes).toEqual([])
-  await expect(page.getByRole('status').filter({ hasText: 'Aguardando pagamento' })).toBeVisible()
+  expect(posts).toBe(0)
+  const opened = context.waitForEvent('page')
+  await page.getByRole('button', { name: /Já fiz o Pix/ }).click()
+  const popup = await opened
+  await popup.waitForLoadState()
+  expect(await popup.evaluate(() => window.opener === null)).toBe(true)
+  expect(popup.url()).toBe(PAID_URL)
+  expect(posts).toBe(1)
+  await popup.close()
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: 'Aguardando conferência' })).toBeVisible()
   await expect(page.getByText(/Agendamento confirmado/)).toHaveCount(0)
 })
 
@@ -1759,7 +1754,7 @@ for (const width of [360, 375, 390, 412, 430]) {
       expect(rect.height).toBeGreaterThanOrEqual(44)
     }
     expect(await cta.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
-    await page.screenshot({ path: '.tmp-pix-whatsapp-audit/mobile-' + width + '.png', fullPage: true })
+    await page.screenshot({ path: '.tmp-pix-review-audit/mobile-' + width + '.png', fullPage: true })
   })
 }
 
@@ -1823,4 +1818,244 @@ test('CTA: polling apos ADMIN confirmar remove todas as opcoes de pagamento', as
   await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
   await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Falar com a barbearia' })).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Declaração de pagamento: cliente e painel
+// ---------------------------------------------------------------------------
+
+const reportedPayment = (over: Record<string, unknown> = {}) => ({
+  ...payment('PENDING'),
+  reportedAt: '2026-09-24T15:02:00Z',
+  reviewExpiresAt: '2026-09-25T15:02:00Z',
+  expiresInSeconds: 86_000,
+  ...over,
+})
+
+test('cliente: o CTA registra no backend ANTES de abrir o WhatsApp', async ({ page }) => {
+  await setup(page)
+  const calls: string[] = []
+  let opened: string | null = null
+  await page.addInitScript(() => {
+    ;(window as any).auditOpened = null
+    window.open = ((url: unknown) => {
+      ;(window as any).auditOpened = String(url)
+      // Simula abertura bem-sucedida.
+      return {} as Window
+    }) as typeof window.open
+  })
+  await page.route('**/api/booking/requests/*/payment-reported', route => {
+    calls.push('report')
+    return ok(route, { reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z' })
+  })
+  let lookups = 0
+  await page.route('**/api/booking/requests/[A-Za-z0-9_-]*', route => route.fallback())
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().url().includes('payment-reported')) return route.fallback()
+    lookups++
+    return ok(route, lookups === 1
+      ? payingView(staticPix)
+      : { ...payingView(staticPix), pix: null, pixPaidUrl: null, paymentReported: true, payment: reportedPayment() })
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), TOKEN)
+  await open(page, 'status')
+
+  await page.getByRole('button', { name: /Já fiz o Pix/ }).click()
+  await expect(page.getByText('Pagamento informado')).toBeVisible()
+
+  // O registro aconteceu, e só depois o WhatsApp abriu.
+  expect(calls).toEqual(['report'])
+  opened = await page.evaluate(() => (window as any).auditOpened)
+  expect(opened).toContain('wa.me/')
+})
+
+test('cliente: falha no registro NAO afirma que informou', async ({ page }) => {
+  await setup(page)
+  await page.addInitScript(() => {
+    ;(window as any).auditOpened = null
+    window.open = ((url: unknown) => { ;(window as any).auditOpened = String(url); return {} as Window }) as typeof window.open
+  })
+  await page.route('**/api/booking/requests/*/payment-reported', route =>
+    route.fulfill({
+      status: 409,
+      json: { success: false, error: { code: 'CONFLICT', message: 'O prazo para pagamento já venceu.' } },
+    }))
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().url().includes('payment-reported')) return route.fallback()
+    return ok(route, payingView(staticPix))
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), TOKEN)
+  await open(page, 'status')
+
+  await page.getByRole('button', { name: /Já fiz o Pix/ }).click()
+
+  // Mensagem do servidor, e NADA de "pagamento informado".
+  await expect(page.getByRole('alert')).toContainText('O prazo para pagamento já venceu.')
+  await expect(page.getByText('Pagamento informado')).toHaveCount(0)
+  // E o WhatsApp não abriu.
+  expect(await page.evaluate(() => (window as any).auditOpened)).toBeNull()
+  // O botão continua disponível para tentar de novo.
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toBeEnabled()
+})
+
+test('cliente: pop-up bloqueado ainda registra e oferece link', async ({ page }) => {
+  await setup(page)
+  // window.open devolvendo null é exatamente o que o bloqueador faz.
+  await page.addInitScript(() => { window.open = (() => null) as typeof window.open })
+  await page.route('**/api/booking/requests/*/payment-reported', route =>
+    ok(route, { reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z' }))
+  let lookups = 0
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().url().includes('payment-reported')) return route.fallback()
+    lookups++
+    return ok(route, lookups === 1 ? payingView(staticPix) : {
+      ...payingView(staticPix), pix: null, pixPaidUrl: null,
+      paymentReported: true, payment: reportedPayment(),
+    })
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), TOKEN)
+  await open(page, 'status')
+
+  await page.getByRole('button', { name: /Já fiz o Pix/ }).click()
+  // O registro valeu; o que falhou foi só abrir.
+  await expect(page.getByRole('status').filter({ hasText: /Se o WhatsApp não abriu/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'abrir o WhatsApp' })).toBeVisible()
+})
+
+test('cliente: depois de informar, QR sai e a tela fala de conferencia', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    ...payingView(staticPix),
+    pix: null,
+    pixPaidUrl: null,
+    paymentReported: true,
+    payment: reportedPayment(),
+  })
+
+  await expect(page.getByText('Pagamento informado')).toBeVisible()
+  await expect(page.getByText('Estamos aguardando a barbearia confirmar o recebimento.')).toBeVisible()
+  await expect(page.getByText('Seu horário permanece reservado durante a conferência.')).toBeVisible()
+  // O QR sai: nao incentivar pagamento duplicado.
+  await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
+  await expect(page.getByText('Pix Copia e Cola')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Já fiz o Pix/ })).toHaveCount(0)
+  // E jamais promete confirmacao.
+  await expect(page.getByText(/Pagamento confirmado/)).toHaveCount(0)
+  await expect(page.getByText(/Agendamento confirmado/)).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /^Confirmar pelo WhatsApp/ })).toHaveCount(0)
+  // A contagem passa a ser da conferencia.
+  await expect(page.getByText(/Prazo para a barbearia conferir/)).toBeVisible()
+  // Falar com a barbearia continua disponivel.
+  await expect(page.getByRole('link', { name: /Falar com a barbearia/ })).toBeVisible()
+})
+
+test('admin: "Pagamento informado" tem apresentacao propria', async ({ page }) => {
+  await setup(page)
+  await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment({
+    reportedAt: '2026-09-24T15:02:00Z',
+    reviewExpiresAt: '2026-09-25T15:02:00Z',
+    expiresAt: '2026-09-25T15:02:00Z',
+    expiresInSeconds: 86_000,
+  })))
+
+  await expect(page.getByRole('heading', { name: 'Pagamento informado' })).toBeVisible()
+  const secao = page.getByRole('region', { name: 'Pagamento informado' })
+  await expect(secao.getByText('Informado pelo cliente', { exact: true })).toBeVisible()
+  await expect(secao.getByText(/Cliente informou/)).toBeVisible()
+  await expect(secao.getByText('R$ 40,00')).toBeVisible()
+  await expect(secao.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
+  await expect(secao.getByText('Prazo para conferir', { exact: true })).toBeVisible()
+  await expect(page.getByText(/O cliente informou que pagou/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Pagamento não localizado' })).toBeVisible()
+})
+
+test('admin: conferencia vencida sem decisao grita na tela', async ({ page }) => {
+  await setup(page)
+  await openAppointment(page, adminAppointment('EXPIRED', adminPayment({
+    status: 'EXPIRED',
+    canConfirmManually: false,
+    windowClosed: true,
+    expiresInSeconds: 0,
+    reportedAt: '2026-09-23T10:00:00Z',
+    reviewExpiresAt: '2026-09-24T10:00:00Z',
+    reviewOverdue: true,
+  })))
+
+  await expect(page.getByRole('heading', { name: 'Pagamento informado' })).toBeVisible()
+  await expect(
+    page.getByRole('region', { name: 'Pagamento informado' })
+      .getByText('Informado — conferência vencida', { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText(/prazo de conferência venceu sem decisão/)).toBeVisible()
+  await expect(page.getByText(/Verifique o extrato/)).toBeVisible()
+  // Nao oferece confirmar num clique: o horario ja voltou para a agenda.
+  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+})
+
+test('agenda admin: distingue "a conferir" de "informado sem conferencia"', async ({ page }) => {
+  await setup(page)
+  const date = '2026-09-24'
+  const at = (clock: string) => ({ date, startsAt: date + 'T' + clock + ':00-03:00', ...slot(clock, 40) })
+  await page.route('**/api/admin/agenda**', route => ok(route, {
+    appointments: [
+      adminAppointment('AWAITING_PAYMENT', adminPayment({ reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z' }), {
+        id: APPT_ID, ...at('09:00'),
+      }),
+      adminAppointment('EXPIRED', adminPayment({
+        status: 'EXPIRED', canConfirmManually: false, windowClosed: true, expiresInSeconds: 0,
+        reportedAt: '2026-09-23T10:00:00Z', reviewExpiresAt: '2026-09-24T10:00:00Z', reviewOverdue: true,
+      }), { id: 'a-overdue', ...at('11:00') }),
+    ],
+  }))
+  await open(page, 'agenda')
+
+  await expect(page.getByText(/Cliente informou o Pix de R\$ 40,00 — conferir/)).toBeVisible()
+  await expect(page.getByText('Pix informado sem conferência — verificar extrato')).toBeVisible()
+})
+
+for (const width of [360, 375, 390, 412, 430]) {
+  test('pagamento informado mobile ' + width + ': cabe sem overflow', async ({ page }) => {
+    await setup(page)
+    await page.setViewportSize({ width, height: 900 })
+    await openStatus(page, {
+      ...payingView(staticPix),
+      pix: null, pixPaidUrl: null, paymentReported: true, payment: reportedPayment(),
+    })
+    await expect(page.getByText('Pagamento informado')).toBeVisible()
+    await noOverflow(page)
+    await touchTargets(page)
+
+    // E o painel administrativo no mesmo estado.
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await setup(page)
+    await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment({
+      reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z',
+      expiresAt: '2026-09-25T15:02:00Z', expiresInSeconds: 86_000,
+    })))
+    await expect(page.getByRole('heading', { name: 'Pagamento informado' })).toBeVisible()
+    await noOverflow(page)
+    await touchTargets(page)
+  })
+}
+
+test('audit: POST aceito e GET indisponivel preservam declaracao e fallback mesmo com window.open lancando', async ({ page }) => {
+  await setup(page)
+  await page.addInitScript(() => { window.open = () => { throw new Error('Blocked') } })
+  let reported = false
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().method() === 'POST') {
+      reported = true
+      return ok(route, { reportedAt: '2026-09-24T15:02:00Z', reviewExpiresAt: '2026-09-25T15:02:00Z' })
+    }
+    return reported ? route.fulfill({ status: 503, json: { success: false, error: { message: 'Consulta indisponivel' } } }) : ok(route, payingView(staticPix))
+  })
+  await page.addInitScript(token => localStorage.setItem('ec.booking.lastRequest', token), TOKEN)
+  await open(page, 'status')
+  await page.getByRole('button', { name: /Já fiz o Pix/ }).click()
+  await expect(page.getByText('Pagamento informado', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'abrir o WhatsApp' })).toHaveAttribute('href', PAID_URL)
+  await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
+  await expect(page.getByText(/Não conseguimos gerar o pagamento/)).toHaveCount(0)
+  await expect(page.getByText(/Agora realize o pagamento/)).toHaveCount(0)
 })

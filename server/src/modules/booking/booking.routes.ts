@@ -10,6 +10,7 @@ import {
   createContactSchema,
   publicBookingRequestSchema,
   publicTokenParamSchema,
+  reportPaymentSchema,
   uuidParamSchema,
 } from "./booking.schemas.js"
 import {
@@ -18,7 +19,8 @@ import {
   publicContactRateLimit,
   publicRequestLookupRateLimit,
 } from "../../middlewares/rate-limit.js"
-import { processPaymentWebhook } from "../payment/payment.service.js"
+import { processPaymentWebhook, reportStaticPixPayment } from "../payment/payment.service.js"
+import { digestPublicToken } from "./public-token.js"
 import { env, paymentMethod, paymentsEnabled } from "../../config/env.js"
 import type { RequestWithRawBody } from "../../app.js"
 import {
@@ -211,6 +213,31 @@ bookingRouter.post("/payments/webhook", paymentWebhookRateLimit, async (req, res
   // resposta de um webhook não é lugar de devolver dado de ninguém.
   return sendSuccess(res, { received: true, outcome })
 })
+
+/**
+ * O cliente declara que fez o Pix.
+ *
+ * Pública porque quem declara é quem pagou, e ele não tem sessão — a chave é o
+ * token do próprio pedido. Não existe corpo: tudo que o servidor precisa saber
+ * está no token e no banco. Enviar valor, data de pagamento ou status por aqui
+ * é impossível, e é de propósito.
+ *
+ * NÃO confirma nada. Marca apenas que o cliente avisou, e com isso transfere o
+ * prazo da reserva para a janela de conferência da barbearia.
+ */
+bookingRouter.post(
+  "/requests/:token/payment-reported",
+  publicRequestLookupRateLimit,
+  validate({ params: publicTokenParamSchema, body: reportPaymentSchema }),
+  async (req, res) => {
+    const { token } = req.params as z.infer<typeof publicTokenParamSchema>
+    const result = await reportStaticPixPayment(digestPublicToken(token))
+    return sendSuccess(res, {
+      reportedAt: result.reportedAt.toISOString(),
+      reviewExpiresAt: result.reviewExpiresAt.toISOString(),
+    })
+  },
+)
 
 /**
  * Política pública da agenda.

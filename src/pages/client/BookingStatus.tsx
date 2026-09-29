@@ -9,6 +9,7 @@ import PixPayment from '@/components/booking/PixPayment'
 import {
   forgetRequestToken,
   getBookingRequest,
+  reportPixPayment,
   readRequestToken,
   type BookingRequestView,
   type PaymentView,
@@ -45,6 +46,7 @@ export default function BookingStatus() {
   const [view, setView] = useState<BookingRequestView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef<AbortController | null>(null)
+  const [reportFallbackUrl, setReportFallbackUrl] = useState<string | null>(null)
 
   const load = useCallback(
     async (options: { quiet?: boolean } = {}) => {
@@ -155,10 +157,38 @@ export default function BookingStatus() {
           pix={view.pix}
           helpUrl={view.paymentHelpUrl}
           paidUrl={view.pixPaidUrl}
+          reported={view.paymentReported}
+          onReport={async () => {
+            if (!token) return
+            const result = await reportPixPayment(token)
+            const url = view.pixPaidUrl
+            // O POST já persistiu: retire o QR mesmo se o GET seguinte falhar.
+            inFlight.current?.abort()
+            setView(current => current && current.payment ? {
+              ...current, pix: null, pixPaidUrl: null, paymentReported: true,
+              payment: {
+                ...current.payment, ...result, expiresAt: result.reviewExpiresAt,
+                expiresInSeconds: Math.min(current.payment.expiresInSeconds, Math.max(0, Math.floor((Date.parse(result.reviewExpiresAt) - Date.parse(result.reportedAt)) / 1000))),
+              },
+            } : current)
+            setReportFallbackUrl(url)
+            if (url) {
+              try { window.open(url, '_blank', 'noopener,noreferrer') } catch { /* Link manual abaixo. */ }
+            }
+            await load({ quiet: true })
+          }}
           onRefresh={() => void load({ quiet: true })}
         />
       )}
 
+      {view.appointment.status === 'AWAITING_PAYMENT' && view.paymentReported && reportFallbackUrl && (
+        <p role="status" className="text-sm text-[var(--muted-foreground)]">
+          Se o WhatsApp não abriu, você pode{' '}
+          <a href={reportFallbackUrl} target="_blank" rel="noopener noreferrer" className="text-[var(--primary)] underline">
+            abrir o WhatsApp
+          </a>.
+        </p>
+      )}
       {view.appointment.status === 'CONFIRMED' && <Confirmed view={view} />}
 
       <div className="space-y-3 pt-2">
@@ -216,7 +246,9 @@ function StatusHeader({ view }: { view: BookingRequestView }) {
       title: 'Seu horário foi aprovado!',
       // A palavra "confirmado" não aparece aqui de propósito: o agendamento
       // ainda não está, e prometer isso é o erro que faz a pessoa não pagar.
-      message: 'Agora realize o pagamento para confirmar o agendamento.',
+      message: view.paymentReported
+        ? 'Aguarde a conferência da barbearia.'
+        : 'Agora realize o pagamento para confirmar o agendamento.',
     },
     CONFIRMED: {
       icon: <Check className="h-10 w-10 text-[var(--primary)]" />,
@@ -335,12 +367,17 @@ function PaymentPanel({
   pix,
   helpUrl,
   paidUrl,
+  reported,
+  onReport,
   onRefresh,
 }: {
   payment: PaymentView
   pix: PixView | null
   helpUrl: string | null
   paidUrl: string | null
+  /** Cliente já declarou o pagamento; a barbearia ainda não decidiu. */
+  reported: boolean
+  onReport: () => Promise<void>
   onRefresh: () => void
 }) {
   // Contagem regressiva a partir do que o servidor informou. O relógio do
@@ -360,7 +397,7 @@ function PaymentPanel({
   }, [remaining === 0])
 
   const label = {
-    PENDING: 'Aguardando pagamento',
+    PENDING: reported ? 'Aguardando conferência' : 'Aguardando pagamento',
     PAID: 'Pagamento confirmado',
     FAILED: 'Não foi possível confirmar o pagamento',
     EXPIRED: 'Pagamento expirado',
@@ -398,7 +435,7 @@ function PaymentPanel({
           <p className="text-sm text-[var(--muted-foreground)]">
             {remaining > 0 ? (
               <>
-                Tempo para pagar:{' '}
+                {reported ? 'Prazo para a barbearia conferir: ' : 'Tempo para pagar: '}
                 <span className="text-[var(--foreground)] font-medium tabular-nums">
                   {formatRemaining(remaining)}
                 </span>
@@ -408,9 +445,36 @@ function PaymentPanel({
             )}
           </p>
 
+          {/*
+            Pagamento declarado: o QR sai da tela.
+
+            Mantê-lo convidaria a pagar de novo — e a pessoa já pagou. A partir
+            daqui a tela fala de CONFERÊNCIA, e em nenhum momento diz
+            "confirmado", que continua dependendo da barbearia.
+          */}
+          {reported && (
+            <div className="rounded-2xl border border-[var(--primary)]/35 bg-[var(--primary)]/10 p-4 space-y-2">
+              <p className="flex items-center gap-2 font-medium text-[var(--primary)]">
+                <Check className="h-4 w-4 shrink-0" />
+                Pagamento informado
+              </p>
+              <p className="text-sm text-[var(--foreground)]">
+                Estamos aguardando a barbearia confirmar o recebimento.
+              </p>
+              <p className="text-sm text-[var(--muted-foreground)]">
+                Seu horário permanece reservado durante a conferência.
+              </p>
+            </div>
+          )}
+
           {/* Pix: QR, chave e Copia e Cola, tudo montado no backend. */}
-          {remaining > 0 && pix && (
-            <PixPayment pix={pix} amountFormatted={payment.amountFormatted} paidUrl={paidUrl} />
+          {remaining > 0 && pix && !reported && (
+            <PixPayment
+              pix={pix}
+              amountFormatted={payment.amountFormatted}
+              paidUrl={paidUrl}
+              onReport={onReport}
+            />
           )}
 
           {/*
@@ -429,7 +493,7 @@ function PaymentPanel({
             Sem Pix apresentável e sem checkout: não inventamos QR nenhum. A
             pessoa fala com a barbearia, que é a única saída honesta aqui.
           */}
-          {remaining > 0 && !pix && !payment.checkoutUrl && (
+          {remaining > 0 && !reported && !pix && !payment.checkoutUrl && (
             <p className="text-sm text-[var(--foreground)]">
               Não conseguimos gerar o pagamento agora. Fale com a barbearia para
               combinar o pagamento e garantir seu horário.

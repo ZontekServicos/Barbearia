@@ -132,7 +132,7 @@ enum AppointmentStatus {
   /// Solicitação pública aguardando confirmação do barbeiro. Segura o horário.
   PENDING
   /// Aprovada pelo barbeiro, aguardando o pagamento do cliente. Segura o
-  /// horário até `pendingExpiresAt` — a janela de pagamento. Estado do
+  /// horário até `pendingExpiresAt` — prazo de pagamento ou conferência. Estado do
   /// AGENDAMENTO; o estado do dinheiro vive em `Payment.status`.
   AWAITING_PAYMENT
   CONFIRMED
@@ -168,7 +168,8 @@ model Appointment {
   /// É a única forma de consultar o próprio pedido sem sessão — telefone não
   /// é credencial e nunca dá acesso a reserva nenhuma.
   publicToken String? @unique @map("public_token") @db.VarChar(64)
-  /// Quando uma solicitação PENDING deixa de segurar o horário.
+  /// Prazo vigente da reserva: aprovação em PENDING; pagamento ou conferência
+  /// em AWAITING_PAYMENT. Nulo depois da confirmação/cancelamento.
   pendingExpiresAt DateTime? @map("pending_expires_at") @db.Timestamptz(3)
   /// Quem confirmou ou recusou, e quando.
   decidedAt   DateTime? @map("decided_at") @db.Timestamptz(3)
@@ -283,8 +284,21 @@ model Payment {
   amountCents Int           @map("amount_cents")
   currency    String        @default("BRL") @db.VarChar(3)
   status      PaymentStatus @default(PENDING)
-  /// Fim da janela de pagamento. Espelha `Appointment.pendingExpiresAt`.
+  /// Fim da janela para o CLIENTE pagar. Nunca reescrito: declarar pagamento
+  /// cria `reviewExpiresAt` em vez de apagar o prazo original, para o histórico
+  /// continuar contando o que aconteceu.
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  /// Quando o CLIENTE declarou ter pago ("já fiz o Pix").
+  ///
+  /// NÃO é confirmação: o pagamento segue PENDING e o agendamento segue
+  /// AWAITING_PAYMENT. O que muda é quem a agenda está esperando — deixa de ser
+  /// o cliente e passa a ser a barbearia. Preenchido uma única vez; cliques
+  /// repetidos não o movem nem esticam a conferência.
+  paymentReportedAt DateTime? @map("payment_reported_at") @db.Timestamptz(3)
+  /// Até quando a barbearia pode conferir o Pix declarado:
+  /// min(paymentReportedAt + 24h, startsAt − 60min). Nulo enquanto não houver
+  /// declaração. A partir dele, é ele — e não `expiresAt` — que vale.
+  reviewExpiresAt DateTime? @map("review_expires_at") @db.Timestamptz(3)
   paidAt    DateTime? @map("paid_at") @db.Timestamptz(3)
   /// Dados de checkout devolvidos pelo provedor — endereço público e código
   /// Pix copia-e-cola. Nunca token, segredo ou credencial do provedor.

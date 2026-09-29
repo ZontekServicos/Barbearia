@@ -279,3 +279,13 @@ export const decideRequestSchema = z.strictObject({
 export const settlePaymentSchema = z.strictObject({
   decision: z.enum(["PAID", "FAILED"]),
 })
+
+/**
+ * Declaração de pagamento do cliente.
+ *
+ * Corpo VAZIO e estrito. Não há campo a enviar: quem é o pedido vem do token, e
+ * horário de declaração, prazo de conferência e estados são decididos pelo
+ * servidor. Qualquer campo extra — `paidAt`, `status`, `amount`,
+ * `paymentReportedAt`, `reviewExpiresAt` — é recusado, não ignorado.
+ */
+export const reportPaymentSchema = z.strictObject({})

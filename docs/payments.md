@@ -273,12 +273,12 @@ Duas sessões confirmando ao mesmo tempo: uma vence, a outra recebe **409** com
 como falha, e então recarrega o estado real. Erro vermelho genérico ali só faria
 o barbeiro clicar de novo.
 
-### Janela de 30 minutos no Pix manual
+### Janela de pagamento do Pix manual
 
-`BookingRules.staticPixPaymentWindowMinutes = 30`, contra 15 do provedor, porque
-o gargalo é humano: ninguém nos notifica, então alguém precisa abrir o extrato,
-achar o lançamento e confirmar. Entre atender uma pessoa e conferir o celular, 15
-minutos derrubam reservas legitimamente pagas.
+`BookingRules.staticPixPaymentWindowMinutes = 120`, contra 15 do provedor.
+Este prazo cobre o cliente pagar e informar. Depois da declaração, vale a janela
+de conferência descrita abaixo, inclusive na consulta pública e na confirmação
+administrativa.
 
 `paymentWindowMinutesFor(method)` é o único lugar que decide isso — inclusive
 para o número que a tela do cliente mostra. Quando um provedor real precisar de
@@ -358,3 +358,119 @@ pagamento desaparecem imediatamente, inclusive se a API estiver indisponível.
 O texto orienta a não realizar pagamento após o prazo. O CTA abre uma única
 janela por clique explícito com `noopener,noreferrer`; a página nunca abre o
 WhatsApp sozinha. Sem número configurado, não orienta um envio indisponível.
+
+## Dois prazos, não um
+
+O defeito que esta separação corrige: a janela de pagamento vencia **enquanto o
+dinheiro já estava na conta**, liberando o horário de quem tinha pagado — porque
+o mesmo prazo cobria duas esperas diferentes.
+
+| Prazo | Quem se espera | Valor |
+| --- | --- | --- |
+| `expiresAt` | o cliente pagar e informar | `staticPixPaymentWindowMinutes` = **120min** |
+| `reviewExpiresAt` | a barbearia conferir o extrato | `min(informado + 24h, início − 60min)` |
+
+Duas horas para pagar porque o cliente pode estar sem o app do banco à mão. Um
+dia para conferir porque olhar extrato é trabalho humano que não acontece no meio
+de um corte.
+
+`paymentReviewDeadline(reportedAt, startsAt)` e `canReviewPayment(...)` são os
+únicos lugares que decidem isso — nenhum `24` ou `60` espalhado.
+
+### A declaração
+
+`POST /booking/requests/:token/payment-reported`, pública, corpo **vazio e
+estrito**: quem é o pedido vem do token, e horários e estados são do servidor.
+
+Ela **não confirma nada**. `Payment` segue `PENDING`, `Appointment` segue
+`AWAITING_PAYMENT`, `paidAt` segue nulo e nenhuma trilha financeira é criada. O
+que muda é `Appointment.pendingExpiresAt`, que passa a valer o prazo de
+conferência — e é só isso que faz a proteção do horário continuar funcionando,
+porque disponibilidade e expiração usam esse campo como prazo vigente.
+A `EXCLUDE` protege os estados ativos, sem consultar o relógio: a transação de
+nova reserva expira as linhas vencidas antes do insert. O UPDATE revalida estado
+e prazo depois de obter o lock, impedindo apagar uma conferência concorrente.
+
+`expiresAt` **nunca** é reescrito: o prazo original fica no histórico.
+
+Idempotente. Dez cliques valem um: o primeiro instante manda e a conferência não
+estica — senão o cliente esticaria a reserva à vontade clicando de novo.
+
+### Ordem do clique
+
+Registro **primeiro**, WhatsApp depois. Abrindo antes, uma falha no registro
+deixaria a pessoa achando que avisou enquanto o horário seguia vencendo pelo
+prazo de pagamento. Falhando o registro, a tela mostra o erro do servidor e
+**não** diz que informou.
+
+Abrir depois de um `await` pode cair no bloqueador de pop-up. Quando isso
+acontece, a tela oferece um link para tocar — a declaração já está registrada,
+que é a parte que não pode se perder.
+
+### Atendimento perto demais
+
+Dentro da folga de 60 minutos não cabe conferência: a declaração é **recusada**
+com orientação para falar com a barbearia. Aceitar criaria prazo nulo ou negativo
+e o cliente sairia achando que avisou quando ninguém teria tempo de olhar antes
+da cadeira. `paymentHelpUrl` continua na tela como a saída de última hora.
+
+### Conferência vencida sem decisão
+
+Nada é confirmado automaticamente, e nada é marcado como pago. O horário volta
+para a agenda pela regra normal — não existe hold infinito —, mas o painel passa
+a marcar `reviewOverdue`: *"O cliente informou o Pix e o prazo de conferência
+venceu sem decisão. Verifique o extrato."*
+
+O alerta é derivado de `paymentReportedAt` + prazo vencido + nunca confirmado, e
+**não** depende do status da cobrança — de propósito: a varredura marca a
+cobrança `EXPIRED`, e amarrar o alerta a `PENDING` o faria desaparecer justamente
+quando passa a importar. Não foi preciso um estado novo no enum.
+
+### "Pagamento não localizado"
+
+A decisão `FAILED` fica na auditoria. Se ainda há prazo, a mesma cobrança
+retorna a `PENDING`, os campos de declaração saem da apresentação e o QR volta.
+A rota pública exige estritamente `PENDING`; ela não reabre cobranças falhadas.
+
+O prazo da reserva passa ao menor entre o prazo original de pagamento e o prazo
+vigente. Se já venceu, pagamento e agendamento viram `EXPIRED` imediatamente.
+Repetir a recusa não aumenta o prazo. Não existe outra cobrança.
+
+Os primeiros `paymentReportedAt` e `reviewExpiresAt` ficam na auditoria
+`PAYMENT_FAILED` e são restaurados numa nova declaração autorizada, sem renovar
+as 24 horas. Esses registros fazem parte do histórico necessário à regra e devem
+ser preservados durante a vida da reserva.
+
+### Tela do cliente
+
+Declarado o pagamento, o **QR sai da tela** — mantê-lo convidaria a pagar de
+novo. No lugar: *"Pagamento informado"*, *"Estamos aguardando a barbearia
+confirmar o recebimento"*, *"Seu horário permanece reservado durante a
+conferência"*. A contagem passa a ser "prazo para a barbearia conferir". Em
+nenhum momento aparece "confirmado".
+
+### Consequência da conferência vencida
+
+**Mesmo quem realmente pagou perde a proteção do horário ao vencer
+`reviewExpiresAt`.** Se a barbearia não conferir a tempo, outro cliente poderá
+reservar. O caso exige contato e tratamento manual, incluindo eventual estorno.
+Não há confirmação automática, nem reativação automática do horário anterior.
+
+### Migration e rollback lógico
+
+`20260929120000_pix_payment_report` adiciona duas colunas nullable, dois CHECKs
+(par obrigatório e prazo posterior à declaração) e índice parcial. Não reescreve
+reservas antigas. A migration é transacional; falha de lock desfaz o conjunto.
+
+Para rollback da aplicação, primeiro interromper novas declarações e resolver
+as conferências abertas mantendo uma versão que respeite o prazo vigente.
+Não voltar diretamente ao código antigo com reviews abertas: ele interpreta
+`expiresAt` como limite e pode apresentar expiração antecipada. Conservar as
+colunas e o histórico é o rollback preferido; não executar DROP nem reduzir
+`pendingExpiresAt` em massa. Uma remoção física futura exige backup e decisão
+explícita após não restar nenhuma conferência ativa.
+
+Validação local: `prisma migrate deploy`, `prisma migrate status` e
+`prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code`.
+Os CHECKs e o índice parcial também são verificados diretamente no PostgreSQL,
+pois o diff do Prisma não representa toda restrição SQL.

@@ -207,6 +207,23 @@ export interface AdminPayment {
   /** Janela vencida com a cobrança ainda em aberto: exige tratamento manual. */
   windowClosed: boolean
   paidAt: string | null
+  /**
+   * Quando o CLIENTE declarou ter pago. `null` = ainda não declarou.
+   *
+   * É o que separa "esperando o cliente pagar" de "esperando a gente conferir" —
+   * dois estados que o painel não pode mostrar igual, porque só o segundo tem
+   * trabalho do lado da barbearia.
+   */
+  reportedAt: string | null
+  /** Prazo da barbearia para conferir o Pix declarado. */
+  reviewExpiresAt: string | null
+  /**
+   * Cliente declarou, prazo de conferência venceu e ninguém decidiu.
+   *
+   * Existe dinheiro possivelmente recebido sem tratamento. O painel precisa
+   * gritar isso: liberar o horário em silêncio deixaria um pagamento órfão.
+   */
+  reviewOverdue: boolean
 }
 
 export interface AdminAppointment extends PublicAppointment {
@@ -228,6 +245,8 @@ export interface AdminPaymentRecord {
   amountCents: number
   expiresAt: Date
   paidAt: Date | null
+  paymentReportedAt?: Date | null
+  reviewExpiresAt?: Date | null
 }
 
 /** Nome do adaptador de Pix estático. Duplicado aqui para o mapper não
@@ -245,8 +264,11 @@ export function toAdminAppointment(
 ): AdminAppointment {
   const view = toPublicAppointment(appointment)
   const payment = appointment.payment ?? null
+  // Declarado o pagamento, o prazo que vale é o da conferência.
+  const deadline = payment ? (payment.reviewExpiresAt ?? appointment.pendingExpiresAt ?? payment.expiresAt) : null
   const windowClosed =
-    payment !== null && payment.status === "PENDING" && payment.expiresAt.getTime() <= now.getTime()
+    payment !== null && payment.status === "PENDING" && deadline!.getTime() <= now.getTime()
+  const reported = payment?.paymentReportedAt ?? null
 
   return {
     ...view,
@@ -274,13 +296,25 @@ export function toAdminAppointment(
             payment.status === "PENDING" &&
             view.status === "AWAITING_PAYMENT" &&
             !windowClosed,
-          expiresAt: payment.expiresAt.toISOString(),
-          expiresInSeconds: Math.max(
-            0,
-            Math.floor((payment.expiresAt.getTime() - now.getTime()) / 1000),
-          ),
+          expiresAt: deadline!.toISOString(),
+          expiresInSeconds: Math.max(0, Math.floor((deadline!.getTime() - now.getTime()) / 1000)),
           windowClosed,
           paidAt: payment.paidAt?.toISOString() ?? null,
+          reportedAt: reported?.toISOString() ?? null,
+          reviewExpiresAt: payment.reviewExpiresAt?.toISOString() ?? null,
+          /**
+           * Declarado, vencido e nunca confirmado.
+           *
+           * Deliberadamente NÃO exige status PENDING: a varredura de expiração
+           * marca a cobrança como EXPIRED quando a reserva caduca, e amarrar o
+           * alerta a PENDING o faria desaparecer justamente quando passa a
+           * importar — um Pix possivelmente recebido, sem ninguém tratando.
+           * Só some quando alguém decide (PAID), que é o objetivo.
+           */
+          reviewOverdue:
+            reported !== null &&
+            payment.status !== "PAID" &&
+            deadline!.getTime() <= now.getTime(),
         }
       : null,
   }

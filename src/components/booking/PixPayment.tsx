@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Copy, MessageCircle, QrCode } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ApiError } from '@/services/api'
 import type { PixView } from '@/services/public-booking'
 
 /**
@@ -89,15 +90,71 @@ function CopyButton({
   )
 }
 
+/**
+ * "Já fiz o Pix": registra no backend ANTES de abrir o WhatsApp.
+ *
+ * A ordem importa. Abrindo primeiro, uma falha no registro deixaria a pessoa com
+ * a impressão de ter avisado enquanto o horário seguia vencendo pelo prazo de
+ * pagamento. Então: POST, e só com ele bem-sucedido o WhatsApp abre.
+ *
+ * A tela pai mantém a declaração e o link manual depois de retirar este
+ * componente junto com o QR. Assim o fallback sobrevive à atualização.
+ */
+function ReportButton({ onReport }: { onReport: () => Promise<void> }) {
+  const [state, setState] = useState<'idle' | 'sending'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const inFlight = useRef(false)
+
+  async function handle() {
+    if (inFlight.current) return
+    inFlight.current = true
+    setState('sending')
+    setError(null)
+    try {
+      await onReport()
+      setState('idle')
+    } catch (err) {
+      // Não afirmamos que o pagamento foi informado quando não foi.
+      setError(
+        err instanceof ApiError ? err.message : 'Não foi possível informar o pagamento agora.',
+      )
+      setState('idle')
+    } finally {
+      inFlight.current = false
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button
+        className="w-full min-h-11 h-auto whitespace-normal gap-2 text-center"
+        onClick={() => void handle()}
+        disabled={state === 'sending'}
+      >
+        <MessageCircle className="h-4 w-4 shrink-0" />
+        <span>{state === 'sending' ? 'Informando...' : 'Já fiz o Pix — confirmar pelo WhatsApp'}</span>
+      </Button>
+      {error && (
+        <p role="alert" className="text-xs text-[var(--destructive)]">
+          {error} Tente novamente.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function PixPayment({
   pix,
   amountFormatted,
   paidUrl,
+  onReport,
 }: {
   pix: PixView
   amountFormatted: string
   /** "Já fiz o Pix". Vem pronto do servidor; nulo = botão não aparece. */
   paidUrl?: string | null
+  /** Registra a declaração no backend. Sem ela o botão não aparece. */
+  onReport?: () => Promise<void>
 }) {
   return (
     <section
@@ -200,14 +257,8 @@ export default function PixPayment({
           O comprovante não vai daqui: a pessoa anexa a imagem dentro do
           WhatsApp, se quiser, depois que a conversa abrir.
         */}
-        {pix.source === 'STATIC_PIX' && pix.requiresManualConfirmation && paidUrl && (
-          <Button
-            className="w-full min-h-11 h-auto whitespace-normal gap-2 text-center"
-            onClick={() => window.open(paidUrl, '_blank', 'noopener,noreferrer')}
-          >
-            <MessageCircle className="h-4 w-4 shrink-0" />
-            <span>Já fiz o Pix — confirmar pelo WhatsApp</span>
-          </Button>
+        {pix.source === 'STATIC_PIX' && pix.requiresManualConfirmation && paidUrl && onReport && (
+          <ReportButton onReport={onReport} />
         )}
       </div>
     </section>

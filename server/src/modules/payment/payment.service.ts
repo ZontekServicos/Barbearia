@@ -3,7 +3,12 @@ import { prisma } from "../../config/prisma.js"
 import { logger } from "../../utils/logger.js"
 import { AppError, ErrorCodes } from "../../utils/errors.js"
 import { STATIC_PIX_PROVIDER } from "./pix/pix.service.js"
-import { BookingRules, paymentAmountCents } from "../booking/booking.rules.js"
+import {
+  BookingRules,
+  canReviewPayment,
+  paymentAmountCents,
+  paymentReviewDeadline,
+} from "../booking/booking.rules.js"
 import { getPaymentProvider, requirePaymentProvider as requirePaymentProviderForWebhook } from "./payment.registry.js"
 import type { RawWebhookRequest } from "./payment.provider.js"
 
@@ -29,11 +34,21 @@ export interface PublicPayment {
   amountFormatted: string
   currency: string
   mode: "FULL" | "DEPOSIT"
-  /** Quanto falta da janela de pagamento, em segundos. Nunca negativo. */
+  /**
+   * Quanto falta do prazo VIGENTE, em segundos. Nunca negativo.
+   *
+   * Antes da declaração é o prazo para pagar; depois dela, o prazo de
+   * conferência da barbearia. A tela mostra um número só porque, para quem
+   * espera, existe um prazo só.
+   */
   expiresInSeconds: number
   expiresAt: string
   checkoutUrl: string | null
   pixQrCode: string | null
+  /** Quando o cliente declarou ter pago. `null` = ainda não declarou. */
+  reportedAt: string | null
+  /** Prazo da barbearia para conferir. `null` sem declaração. */
+  reviewExpiresAt: string | null
 }
 
 const formatCents = (cents: number) =>
@@ -48,22 +63,32 @@ export function toPublicPayment(
     expiresAt: Date
     checkoutUrl: string | null
     pixQrCode: string | null
+    paymentReportedAt?: Date | null
+    reviewExpiresAt?: Date | null
   },
   now: Date = new Date(),
+  reservationExpiresAt?: Date | null,
 ): PublicPayment {
+  /**
+   * Declarado o pagamento, quem manda é o prazo de conferência.
+   *
+   * Continuar mostrando o prazo original faria a tela contar para zero enquanto
+   * a barbearia ainda tem um dia para olhar o extrato — e o cliente pensaria que
+   * perdeu o horário que acabou de pagar.
+   */
+  const deadline = payment.reviewExpiresAt ?? reservationExpiresAt ?? payment.expiresAt
   return {
     status: payment.status,
     amountCents: payment.amountCents,
     amountFormatted: formatCents(payment.amountCents),
     currency: payment.currency,
     mode: payment.mode,
-    expiresInSeconds: Math.max(
-      0,
-      Math.floor((payment.expiresAt.getTime() - now.getTime()) / 1000),
-    ),
-    expiresAt: payment.expiresAt.toISOString(),
+    expiresInSeconds: Math.max(0, Math.floor((deadline.getTime() - now.getTime()) / 1000)),
+    expiresAt: deadline.toISOString(),
     checkoutUrl: payment.checkoutUrl,
     pixQrCode: payment.pixQrCode,
+    reportedAt: payment.paymentReportedAt?.toISOString() ?? null,
+    reviewExpiresAt: payment.reviewExpiresAt?.toISOString() ?? null,
   }
 }
 
@@ -338,7 +363,7 @@ export async function settleStaticPayment(
   actorId: string,
   appointmentId: string,
   decision: "PAID" | "FAILED",
-  now: Date = new Date(),
+  now?: Date,
 ): Promise<void> {
   await prisma.$transaction(async tx => {
     const actor = await tx.user.findUnique({ where: { id: actorId } })
@@ -350,6 +375,7 @@ export async function settleStaticPayment(
       include: { payment: true },
     })
     if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Agendamento não encontrado.")
+    now ??= new Date()
     const payment = appointment.payment
     if (!payment) {
       throw AppError.badRequest(ErrorCodes.VALIDATION_ERROR, "Este agendamento não tem cobrança.")
@@ -372,7 +398,7 @@ export async function settleStaticPayment(
 
     // O prazo vale mesmo antes da limpeza persistir EXPIRED no agendamento.
     // Recusar aqui impede reativar uma reserva que a tela já mostrou vencida.
-    if (payment.expiresAt <= now || isPaymentWindowClosed(appointment, now)) {
+    if ((payment.reviewExpiresAt ?? payment.expiresAt) <= now || isPaymentWindowClosed(appointment, now)) {
       throw AppError.conflict(ErrorCodes.CONFLICT, "O prazo de pagamento deste agendamento terminou.")
     }
     if (payment.status === "EXPIRED" || payment.status === "CANCELED") {
@@ -390,9 +416,29 @@ export async function settleStaticPayment(
         data: { status: "CONFIRMED", pendingExpiresAt: null },
       })
     } else {
-      // Não recebido: a cobrança falha, mas a reserva continua na janela — dá
-      // para tentar de novo enquanto o prazo não venceu.
-      await tx.payment.update({ where: { id: payment.id }, data: { status: "FAILED" } })
+      /**
+       * Pix não localizado no extrato.
+       *
+       * Dentro do menor prazo (pagamento original ou reserva vigente), reabre
+       * a mesma cobrança PENDING e o QR. Fora dele, expira imediatamente.
+       * A auditoria preserva os primeiros instantes para uma nova declaração
+       * não renovar o hold. Recusas repetidas também não aumentam o prazo.
+       */
+      const retryDeadline = new Date(Math.min(payment.expiresAt.getTime(), (appointment.pendingExpiresAt ?? payment.expiresAt).getTime()))
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: retryDeadline > now ? "PENDING" : "EXPIRED",
+          paymentReportedAt: null, reviewExpiresAt: null,
+        },
+      })
+      await tx.appointment.update({
+        where: { id: appointmentId },
+        data: {
+          pendingExpiresAt: retryDeadline,
+          ...(retryDeadline <= now ? { status: "EXPIRED" as const, decidedAt: now } : {}),
+        },
+      })
     }
 
     await tx.adminAuditLog.create({
@@ -400,10 +446,153 @@ export async function settleStaticPayment(
         actorId,
         targetUserId: appointment.userId,
         action: `PAYMENT_${decision}`,
-        metadata: { appointmentId, provider: payment.provider, amountCents: payment.amountCents },
+        metadata: {
+          appointmentId,
+          provider: payment.provider,
+          amountCents: payment.amountCents,
+          // Preserva a declaração do cliente mesmo quando ela é desfeita: é o
+          // registro de que alguém disse ter pagado e não foi encontrado.
+          ...(payment.paymentReportedAt
+            ? {
+                paymentReportedAt: payment.paymentReportedAt.toISOString(),
+                reviewExpiresAt: payment.reviewExpiresAt!.toISOString(),
+              }
+            : {}),
+        },
       },
     })
   })
 
   logger.info("Pagamento em Pix estático decidido", { actorId, appointmentId, to: decision })
+}
+
+/** O que o cliente recebe ao declarar o pagamento. */
+export interface PaymentReportResult {
+  reportedAt: Date
+  /** Até quando a barbearia pode conferir. */
+  reviewExpiresAt: Date
+  /** `true` quando esta chamada foi a que registrou (não uma repetição). */
+  firstReport: boolean
+}
+
+/**
+ * O cliente declara que fez o Pix: "já fiz o Pix".
+ *
+ * NÃO É CONFIRMAÇÃO. O pagamento continua PENDING e o agendamento continua
+ * AWAITING_PAYMENT. A única autoridade para PAID/CONFIRMED continua sendo a
+ * barbearia, depois de ver o dinheiro no extrato (ver `settleStaticPayment`).
+ *
+ * O que a declaração muda é DE QUEM a agenda está esperando. Antes dela, o prazo
+ * era do cliente e vencer significava desistência. Depois dela, o prazo é da
+ * barbearia. O vencimento do prazo ORIGINAL não libera o horário; o vencimento
+ * da conferência libera, exigindo tratamento manual se houve pagamento.
+ *
+ * Mecanicamente: `Appointment.pendingExpiresAt` passa a valer o prazo de
+ * conferência. Disponibilidade e cleanup usam esse prazo. A EXCLUDE protege
+ * os estados ativos; o cleanup atômico expira os vencidos antes de novo insert.
+ *
+ * Idempotente: a primeira declaração manda. Clicar dez vezes não move
+ * `paymentReportedAt` nem estica a conferência — senão o cliente esticaria o
+ * prazo à vontade e seguraria o horário indefinidamente.
+ */
+export async function reportStaticPixPayment(
+  publicTokenDigest: string,
+  now?: Date,
+): Promise<PaymentReportResult> {
+  return prisma.$transaction(async tx => {
+    const appointment = await tx.appointment.findUnique({
+      where: { publicToken: publicTokenDigest },
+      include: { payment: true },
+    })
+    // Token desconhecido responde como qualquer outro não encontrado: quem não
+    // tem o token do pedido não descobre nada sobre ele.
+    if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
+
+    await lockAppointment(tx, appointment.id)
+    const current = await tx.appointment.findUniqueOrThrow({
+      where: { id: appointment.id },
+      include: { payment: true },
+    })
+    const payment = current.payment
+    // O relógio de produção é lido após adquirir o lock, não antes da espera.
+    now ??= new Date()
+
+    if (!payment || payment.provider !== STATIC_PIX_PROVIDER) {
+      // Sem Pix da barbearia não há o que declarar: numa cobrança de provedor a
+      // confirmação chega por webhook.
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento não aguarda Pix.")
+    }
+
+    if (current.status !== "AWAITING_PAYMENT" || payment.status !== "PENDING") {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento não está aguardando pagamento.")
+    }
+    if (isPaymentWindowClosed(current, now) || (payment.reviewExpiresAt && payment.reviewExpiresAt <= now)) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "O prazo para pagamento já venceu.")
+    }
+
+    // Repetição válida preserva o primeiro registro.
+    if (payment.paymentReportedAt && payment.reviewExpiresAt) {
+      return {
+        reportedAt: payment.paymentReportedAt,
+        reviewExpiresAt: payment.reviewExpiresAt,
+        firstReport: false,
+      }
+    }
+
+    // Prazo de pagamento já vencido sem declaração: a reserva caducou pela regra
+    // normal e o horário voltou a ser oferecido.
+    if (payment.expiresAt <= now) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "O prazo para pagamento já venceu.")
+    }
+    /**
+     * Atendimento perto demais para caber conferência.
+     *
+     * Aceitar aqui criaria prazo nulo ou negativo, e o cliente sairia achando
+     * que avisou quando ninguém teria tempo de conferir antes da cadeira. A
+     * saída honesta é falar com a barbearia, que a tela oferece ao lado.
+     */
+    if (!canReviewPayment(now, current.startsAt)) {
+      throw AppError.conflict(
+        ErrorCodes.CONFLICT,
+        "Seu horário está muito próximo para conferirmos o Pix a tempo. Fale com a barbearia.",
+      )
+    }
+
+    // Uma nova tentativa autorizada pelo ADMIN não renova a primeira janela.
+    // A decisão preserva os dois instantes na auditoria antes de reabrir o QR.
+    const decisions = await tx.adminAuditLog.findMany({
+      where: { action: "PAYMENT_FAILED", metadata: { path: ["appointmentId"], equals: current.id } },
+      orderBy: { createdAt: "asc" },
+      select: { metadata: true },
+    })
+    const previous = decisions.map(entry => entry.metadata as Record<string, unknown> | null)
+      .find(entry => typeof entry?.paymentReportedAt === "string" && typeof entry?.reviewExpiresAt === "string")
+    const reportedAt = previous ? new Date(previous.paymentReportedAt as string) : now
+    const reviewExpiresAt = previous
+      ? new Date(Math.min(new Date(previous.reviewExpiresAt as string).getTime(), paymentReviewDeadline(reportedAt, current.startsAt).getTime()))
+      : paymentReviewDeadline(now, current.startsAt)
+    if (reviewExpiresAt <= now) {
+      throw AppError.conflict(ErrorCodes.CONFLICT, "O prazo de conferência já venceu. Fale com a barbearia.")
+    }
+    await tx.payment.update({
+      where: { id: payment.id },
+      // Não altera o estado financeiro: declarar não confirma pagamento.
+      data: { paymentReportedAt: reportedAt, reviewExpiresAt },
+    })
+    /**
+     * O prazo da RESERVA passa a ser o da conferência.
+     *
+     * É esta linha que impede o horário de ser liberado enquanto a barbearia
+     * ainda não olhou o extrato — sem ela, a varredura expiraria a reserva no
+     * `expiresAt` original, com o dinheiro já na conta.
+     */
+    await tx.appointment.update({
+      where: { id: current.id },
+      data: { pendingExpiresAt: reviewExpiresAt },
+    })
+
+    // Sem dado pessoal: o que importa no log é que a etapa aconteceu.
+    logger.info("Cliente declarou pagamento por Pix")
+    return { reportedAt, reviewExpiresAt, firstReport: previous === undefined }
+  })
 }

@@ -93,6 +93,13 @@ export interface PublicRequestView {
    */
   notifyUrl: string | null
   /**
+   * O cliente já declarou o pagamento e a barbearia ainda não decidiu.
+   *
+   * A tela mostra "Pagamento informado" em vez do QR — e nunca "confirmado",
+   * que continua dependendo da barbearia.
+   */
+  paymentReported: boolean
+  /**
    * "Já fiz o Pix": o cliente avisa que pagou e pede a conferência.
    *
    * Só no Pix ESTÁTICO. Numa cobrança de provedor a confirmação chega sozinha
@@ -354,7 +361,7 @@ export async function getPublicRequest(
       appointment.pendingExpiresAt.getTime() <= now.getTime()) ||
       (appointment.status === "AWAITING_PAYMENT" &&
         appointment.payment !== null &&
-        appointment.payment.expiresAt.getTime() <= now.getTime()))
+        (appointment.payment.reviewExpiresAt ?? appointment.payment.expiresAt).getTime() <= now.getTime()))
 
   const view = toPublicAppointment(lapsed ? { ...appointment, status: "EXPIRED" } : appointment)
   const paid = appointment.payment?.status === "PAID"
@@ -375,13 +382,34 @@ export async function getPublicRequest(
    * O Pix aparece só com a cobrança em aberto e o horário ainda aguardando
    * pagamento. Confirmado, recusado, expirado ou cancelado: nada de QR.
    */
+  /**
+   * A tela ainda está pedindo pagamento.
+   *
+   * `FAILED` entra junto com `PENDING`: quando a barbearia não encontra o Pix e
+   * ainda há prazo, o certo é o cliente tentar de novo — e para isso ele precisa
+   * ver o QR outra vez. Sem isso, o painel prometia nova tentativa e a tela do
+   * cliente não oferecia nenhuma.
+   *
+   * Prazo vencido (`lapsed`) fecha os dois casos.
+   */
   const awaitingPayment =
-    view.status === "AWAITING_PAYMENT" && appointment.payment?.status === "PENDING" && !lapsed
+    view.status === "AWAITING_PAYMENT" &&
+    (appointment.payment?.status === "PENDING" || appointment.payment?.status === "FAILED") &&
+    !lapsed
+
+  /**
+   * Pagamento já declarado pelo cliente.
+   *
+   * O QR sai da tela: manter o convite a pagar depois de a pessoa dizer que
+   * pagou é caminho direto para pagamento duplicado. A partir daqui a tela fala
+   * de conferência, não de pagamento.
+   */
+  const reported = appointment.payment?.paymentReportedAt != null
 
   // Calculada uma vez: a tela e o botão "já fiz o Pix" dependem da MESMA
   // apresentação, então derivar duas vezes abriria espaço para divergirem.
   const pixPresentation =
-    awaitingPayment && appointment.payment
+    awaitingPayment && !reported && appointment.payment
       ? await buildPixPresentation(appointment.payment, appointment.publicReference)
       : null
 
@@ -390,9 +418,9 @@ export async function getPublicRequest(
     reference: appointment.publicReference,
     payment:
       appointment.payment && !lapsed
-        ? toPublicPayment(appointment.payment, now)
+        ? toPublicPayment(appointment.payment, now, appointment.pendingExpiresAt)
         : appointment.payment
-          ? toPublicPayment({ ...appointment.payment, status: "EXPIRED" }, now)
+          ? toPublicPayment({ ...appointment.payment, status: "EXPIRED" }, now, appointment.pendingExpiresAt)
           : null,
     /**
      * Link do WhatsApp SÓ com o agendamento confirmado.
@@ -411,6 +439,9 @@ export async function getPublicRequest(
           })
         : null,
     pix: pixPresentation,
+    // Continua valendo durante a conferência: é por onde a pessoa pergunta se o
+    // Pix apareceu, e é a única saída quando o horário está perto demais para
+    // aceitar declaração.
     paymentHelpUrl: awaitingPayment && whatsappData ? buildPaymentHelpLink(whatsappData) : null,
     /**
      * Depende de `pix` ter saído como estático: assim o botão existe exatamente
@@ -418,6 +449,7 @@ export async function getPublicRequest(
      * vencido zera `pix`, e com ele este link — reserva expirada não deve
      * receber pagamento nem pedido de conferência.
      */
+    paymentReported: awaitingPayment && reported,
     pixPaidUrl:
       pixPresentation?.requiresManualConfirmation && whatsappData
         ? buildPixPaidLink({

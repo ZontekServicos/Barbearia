@@ -22,6 +22,12 @@ export interface AdminPayment {
   /** Prazo vencido com cobrança em aberto: exige tratamento manual. */
   windowClosed: boolean
   paidAt: string | null
+  /** Quando o CLIENTE declarou ter pago. Nulo = ainda não declarou. */
+  reportedAt: string | null
+  /** Prazo para conferir o Pix declarado. */
+  reviewExpiresAt: string | null
+  /** Declarado, prazo vencido e ninguém decidiu: exige tratamento. */
+  reviewOverdue: boolean
 }
 
 export interface AdminAppointment extends Appointment {

@@ -400,7 +400,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.equal(failed.status, 200)
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
-      "FAILED",
+      "PENDING",
     )
     // A reserva continua na janela: dá para tentar de novo dentro do prazo.
     assert.equal(
@@ -553,18 +553,20 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
   // O que o painel administrativo recebe para confirmar o Pix
   // -------------------------------------------------------------------------
 
-  it("a janela do Pix estático é de 30 minutos, decidida em um só lugar", async () => {
+  it("a janela do Pix estático é de 120 minutos, decidida em um só lugar", async () => {
     const rules = await import("../modules/booking/booking.rules.js")
-    assert.equal(rules.BookingRules.staticPixPaymentWindowMinutes, 30)
+    // Duas horas para o CLIENTE pagar e informar. Trinta minutos derrubavam
+    // reservas que seriam pagas: o prazo de conferência é que cobre a barbearia.
+    assert.equal(rules.BookingRules.staticPixPaymentWindowMinutes, 120)
     // O prazo do provedor continua 15: quem confirma lá é webhook, em segundos.
     assert.equal(rules.BookingRules.paymentWindowMinutes, 15)
-    assert.equal(rules.paymentWindowMinutesFor("STATIC_PIX"), 30)
+    assert.equal(rules.paymentWindowMinutesFor("STATIC_PIX"), 120)
     assert.equal(rules.paymentWindowMinutesFor("DYNAMIC_PROVIDER_PIX"), 15)
     assert.equal(rules.paymentWindowMinutesFor("NONE"), 15)
 
     // E a política pública informa a janela da forma vigente, não a constante.
     const policy = await call("/booking/policy")
-    assert.equal(policy.body.data.paymentWindowMinutes, 30)
+    assert.equal(policy.body.data.paymentWindowMinutes, 120)
 
     // O prazo gravado na aprovação é o de 30 minutos.
     const service = await makeService()
@@ -574,7 +576,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     await approve(access, appointmentId)
     const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     const minutes = (payment.expiresAt.getTime() - before) / 60_000
-    assert.ok(minutes > 29 && minutes < 31, `janela de ${minutes} minutos`)
+    assert.ok(minutes > 119 && minutes < 121, `janela de ${minutes} minutos`)
   })
 
   it("o painel recebe método, valor, status e referência — sem dado interno", async () => {
@@ -774,7 +776,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.notEqual(appointment.pendingExpiresAt, null, "o prazo continua valendo")
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
-      "FAILED",
+      "PENDING",
     )
     assert.equal(await prisma.adminAuditLog.count({ where: { action: "PAYMENT_FAILED" } }), 1)
 
@@ -946,7 +948,16 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
         limits.publicRequestLookupRateLimit.resetKey("127.0.0.1")
         const response = await call("/booking/requests/" + publicToken)
         assert.equal(response.status, 200)
-        assert.equal(Boolean(response.body.data.pixPaidUrl), status === "AWAITING_PAYMENT" && paymentStatus === "PENDING", status + "/" + paymentStatus)
+        /**
+         * FAILED entra junto com PENDING.
+         *
+         * "A barbearia não achou o Pix" com prazo de sobra é exatamente o caso de
+         * tentar outra vez — e para isso o cliente precisa do QR e do CTA de
+         * volta. Antes a tela prometia nova tentativa no painel e não oferecia
+         * nenhuma do lado do cliente.
+         */
+        const payable = paymentStatus === "PENDING" || paymentStatus === "FAILED"
+        assert.equal(Boolean(response.body.data.pixPaidUrl), status === "AWAITING_PAYMENT" && payable, status + "/" + paymentStatus)
       }
     }
   })
@@ -1074,5 +1085,590 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
       assert.match(message, /Poderia confirmar o recebimento/)
     })
   }
+
+
+  // -------------------------------------------------------------------------
+  // Declaração de pagamento pelo cliente
+  // -------------------------------------------------------------------------
+
+  const report = (token: string) =>
+    call(`/booking/requests/${token}/payment-reported`, { body: {} })
+
+  it("audit: review remains readable and confirmable past payment expiry", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    assert.equal((await report(publicToken)).status, 200)
+    await prisma.payment.update({ where: { appointmentId }, data: { expiresAt: new Date(Date.now() - 1000) } })
+    const view = await call("/booking/requests/" + publicToken)
+    assert.equal(view.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(view.body.data.paymentReported, true)
+    assert.equal(view.body.data.pix, null)
+    assert.equal((await call("/admin/appointments/" + appointmentId + "/payment", { access, body: { decision: "PAID" } })).status, 200)
+  })
+
+  it("audit: report requires PENDING and refuses terminal states", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    for (const status of ["FAILED", "EXPIRED", "CANCELED"] as const) {
+      await prisma.payment.update({ where: { appointmentId }, data: { status } })
+      assert.equal((await report(publicToken)).status, 409, status)
+    }
+    await prisma.payment.update({ where: { appointmentId }, data: { status: "PENDING" } })
+    assert.equal((await report(publicToken)).status, 200)
+    await call("/admin/appointments/" + appointmentId + "/payment", { access, body: { decision: "PAID" } })
+    assert.equal((await report(publicToken)).status, 409)
+  })
+
+  it("audit: absent body is accepted", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    assert.equal((await call("/booking/requests/" + publicToken + "/payment-reported", { method: "POST" })).status, 200)
+  })
+
+
+  it("declarar não confirma nada, mas transfere o prazo para a conferência", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const before = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const apptBefore = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    // Sem declaração, a reserva vale pelo prazo de PAGAMENTO.
+    assert.equal(apptBefore.pendingExpiresAt!.getTime(), before.expiresAt.getTime())
+
+    const response = await report(publicToken)
+    assert.equal(response.status, 200)
+
+    const after = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const apptAfter = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    assert.notEqual(after.paymentReportedAt, null)
+    assert.notEqual(after.reviewExpiresAt, null)
+    // NÃO confirma: essas duas linhas são a razão de existir do teste.
+    assert.equal(after.status, "PENDING")
+    assert.equal(after.paidAt, null)
+    assert.equal(apptAfter.status, "AWAITING_PAYMENT")
+    // O prazo original é preservado, e a reserva passa a valer pelo da conferência.
+    assert.equal(after.expiresAt.getTime(), before.expiresAt.getTime())
+    assert.equal(apptAfter.pendingExpiresAt!.getTime(), after.reviewExpiresAt!.getTime())
+    // Nenhuma trilha financeira: declarar não é decidir.
+    assert.equal(
+      await prisma.adminAuditLog.count({ where: { action: { startsWith: "PAYMENT_" } } }),
+      0,
+    )
+  })
+
+  it("declarar é idempotente: dez cliques valem um", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const first = await report(publicToken)
+    assert.equal(first.status, 200)
+    const results = await Promise.all(Array.from({ length: 10 }, () => report(publicToken)))
+    assert.ok(results.every(r => r.status === 200), JSON.stringify(results.map(r => r.status)))
+    // Nem o instante se move, nem o prazo estica — senão o cliente esticaria a
+    // reserva à vontade clicando de novo.
+    assert.equal(new Set(results.map(r => r.body.data.reportedAt)).size, 1)
+    assert.equal(results[0]!.body.data.reportedAt, first.body.data.reportedAt)
+    assert.equal(results[0]!.body.data.reviewExpiresAt, first.body.data.reviewExpiresAt)
+  })
+
+  it("o horário segue protegido depois do prazo de pagamento, durante a conferência", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    await report(publicToken)
+
+    // O prazo de PAGAMENTO vence — mas o de conferência não.
+    await prisma.payment.updateMany({
+      where: { appointmentId },
+      data: { expiresAt: new Date(Date.now() - 60_000) },
+    })
+
+    const availability = await call(
+      `/booking/availability?date=${nextTuesday()}&serviceId=${service.id}`,
+    )
+    assert.equal(
+      availability.body.data.slots.some((slot: any) => slot.startsAtClock === "09:00"),
+      false,
+      "quem informou o pagamento não perde o horário",
+    )
+    limits.publicBookingRateLimit.resetKey("127.0.0.1")
+    limits.publicContactRateLimit.resetKey("127.0.0.1")
+    const rival = await call("/booking/contacts", {
+      body: { fullName: "Outro Cliente", phone: phone() },
+    })
+    const stolen = await call("/booking/requests", {
+      body: {
+        contactHandle: rival.body.data.contactHandle,
+        serviceId: service.id,
+        date: nextTuesday(),
+        startsAt: "09:00",
+      },
+    })
+    assert.equal(stolen.status, 409, "o horário não pode ser tomado")
+    assert.equal(
+      await prisma.appointment.count({
+        where: { status: { in: ["PENDING", "AWAITING_PAYMENT", "CONFIRMED"] } },
+      }),
+      1,
+    )
+  })
+
+  it("atendimento perto demais recusa a declaração e orienta falar com a barbearia", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    // Dentro da folga de uma hora não cabe conferência nenhuma.
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { startsAt: new Date(Date.now() + 30 * 60_000) },
+    })
+
+    const refused = await report(publicToken)
+    assert.equal(refused.status, 409)
+    assert.match(refused.body.error.message, /Fale com a barbearia/i)
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(payment.paymentReportedAt, null, "nada é gravado numa recusa")
+    assert.equal(payment.reviewExpiresAt, null)
+    // A saída honesta continua na tela.
+    const view = await call(`/booking/requests/${publicToken}`)
+    assert.ok(view.body.data.paymentHelpUrl)
+  })
+
+  it("a tela troca o QR por 'pagamento informado' e nunca diz confirmado", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const paying = await call(`/booking/requests/${publicToken}`)
+    assert.ok(paying.body.data.pix, "antes: QR presente")
+    assert.equal(paying.body.data.paymentReported, false)
+
+    await report(publicToken)
+    const reported = await call(`/booking/requests/${publicToken}`)
+    assert.equal(reported.body.data.paymentReported, true)
+    // O QR sai: manter o convite a pagar levaria a pagamento duplicado.
+    assert.equal(reported.body.data.pix, null)
+    assert.equal(reported.body.data.pixPaidUrl, null)
+    // E continua sem prometer confirmação.
+    assert.equal(reported.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(reported.body.data.payment.status, "PENDING")
+    assert.equal(reported.body.data.whatsappUrl, null)
+    // O prazo mostrado passa a ser o da conferência.
+    assert.equal(reported.body.data.payment.expiresAt, reported.body.data.payment.reviewExpiresAt)
+    assert.ok(reported.body.data.payment.expiresInSeconds > 3600)
+  })
+
+  it("o painel distingue 'aguardando pagamento' de 'pagamento informado'", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    let detail = await call(`/admin/appointments/${appointmentId}`, { access })
+    assert.equal(detail.body.data.appointment.payment.reportedAt, null)
+
+    await report(publicToken)
+    detail = await call(`/admin/appointments/${appointmentId}`, { access })
+    const payment = detail.body.data.appointment.payment
+    assert.ok(payment.reportedAt, "o painel vê quando o cliente informou")
+    assert.ok(payment.reviewExpiresAt)
+    assert.equal(payment.expiresAt, payment.reviewExpiresAt, "prazo vigente é o de conferência")
+    assert.equal(payment.canConfirmManually, true, "a barbearia pode confirmar")
+    assert.equal(payment.reviewOverdue, false)
+    // A agenda também, para a lista poder sinalizar.
+    const agenda = await call(`/admin/agenda?from=${nextTuesday()}`, { access })
+    const item = agenda.body.data.appointments.find((entry: any) => entry.id === appointmentId)
+    assert.ok(item.payment.reportedAt)
+  })
+
+  it("conferência vencida sem decisão fica sinalizada, e o alerta sobrevive à varredura", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    await report(publicToken)
+
+    // A declaração foi 25h atrás, então o prazo de 24h venceu há uma hora. Esta
+    // forma respeita o CHECK do banco (reviewExpiresAt > paymentReportedAt) em
+    // vez de burlá-lo.
+    const reportedLongAgo = new Date(Date.now() - 25 * 60 * 60_000)
+    const past = new Date(Date.now() - 60 * 60_000)
+    await prisma.payment.updateMany({
+      where: { appointmentId },
+      data: { paymentReportedAt: reportedLongAgo, reviewExpiresAt: past },
+    })
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { pendingExpiresAt: past },
+    })
+
+    let detail = await call(`/admin/appointments/${appointmentId}`, { access })
+    assert.equal(detail.body.data.appointment.payment.reviewOverdue, true)
+    // Nunca confirma sozinho.
+    assert.notEqual(detail.body.data.appointment.payment.status, "PAID")
+    assert.notEqual(detail.body.data.appointment.status, "CONFIRMED")
+
+    // Uma nova reserva dispara a varredura, que marca a cobrança EXPIRED. O
+    // alerta NÃO pode desaparecer justamente aí — é quando ele importa.
+    limits.publicBookingRateLimit.resetKey("127.0.0.1")
+    limits.publicContactRateLimit.resetKey("127.0.0.1")
+    await book(service.id)
+    detail = await call(`/admin/appointments/${appointmentId}`, { access })
+    assert.equal(detail.body.data.appointment.payment.reviewOverdue, true, "alerta persiste")
+    assert.ok(detail.body.data.appointment.payment.reportedAt, "a declaração fica registrada")
+    assert.equal(
+      await prisma.appointment.count({
+        where: { status: { in: ["PENDING", "AWAITING_PAYMENT", "CONFIRMED"] } },
+      }),
+      1,
+      "sem double booking",
+    )
+  })
+
+  it("'pagamento não localizado' desfaz a declaração e devolve a chance de tentar", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+    await report(publicToken)
+    const original = (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).expiresAt
+
+    const failed = await call(`/admin/appointments/${appointmentId}/payment`, {
+      access,
+      body: { decision: "FAILED" },
+    })
+    assert.equal(failed.status, 200)
+
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    assert.equal(payment.status, "PENDING")
+    // Declaração desfeita: sem isso a tela do cliente ficaria presa em
+    // "pagamento informado", escondendo o QR e impedindo nova tentativa.
+    assert.equal(payment.paymentReportedAt, null)
+    assert.equal(payment.reviewExpiresAt, null)
+    assert.equal(appointment.status, "AWAITING_PAYMENT", "a reserva não é destruída")
+    assert.equal(appointment.pendingExpiresAt!.getTime(), original.getTime())
+    // A declaração desfeita sobrevive na auditoria.
+    const audit = await prisma.adminAuditLog.findFirstOrThrow({
+      where: { action: "PAYMENT_FAILED" },
+    })
+    assert.ok((audit.metadata as any).paymentReportedAt)
+
+    // E o cliente pode pagar e declarar de novo.
+    const again = await call(`/booking/requests/${publicToken}`)
+    assert.ok(again.body.data.pix, "o QR volta")
+    assert.equal((await report(publicToken)).status, 200)
+    assert.equal(
+      (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
+      "PENDING",
+      "nova declaração recoloca a cobrança em aberto",
+    )
+    // Só o ADMIN confirma.
+    assert.equal(
+      (await call(`/admin/appointments/${appointmentId}/payment`, {
+        access,
+        body: { decision: "PAID" },
+      })).status,
+      200,
+    )
+    assert.equal(
+      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
+      "CONFIRMED",
+    )
+  })
+
+  it("a rota de declaração é estrita e só serve ao próprio pedido", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    for (const key of [
+      "paidAt", "status", "paymentStatus", "amount", "amountCents", "appointmentStatus",
+      "reviewExpiresAt", "paymentReportedAt", "provider", "userId", "reportedAt",
+    ]) {
+      const response = await call(`/booking/requests/${publicToken}/payment-reported`, {
+        body: { [key]: "injetado" },
+      })
+      assert.equal(response.status, 400, key)
+    }
+    assert.equal(
+      (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).paymentReportedAt,
+      null,
+    )
+
+    // Token de outro pedido não declara este.
+    limits.publicBookingRateLimit.resetKey("127.0.0.1")
+    limits.publicContactRateLimit.resetKey("127.0.0.1")
+    const other = await book(service.id, "10:20")
+    await approve(access, other.appointmentId)
+    await report(other.publicToken)
+    assert.equal(
+      (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).paymentReportedAt,
+      null,
+      "cada token declara só o seu",
+    )
+
+    assert.equal((await call("/booking/requests/xxx/payment-reported", { body: {} })).status, 400)
+    const unknown = await call(
+      `/booking/requests/${randomBytes(32).toString("base64url")}/payment-reported`,
+      { body: {} },
+    )
+    assert.equal(unknown.status, 404)
+    assert.doesNotMatch(JSON.stringify(unknown.body), /EC-|\+55/)
+  })
+
+  it("declarar depois do prazo de pagamento é recusado", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    await approve(access, appointmentId)
+
+    const past = new Date(Date.now() - 60_000)
+    await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: past } })
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { pendingExpiresAt: past },
+    })
+
+    const refused = await report(publicToken)
+    assert.equal(refused.status, 409)
+    assert.match(refused.body.error.message, /prazo para pagamento já venceu/i)
+    assert.equal(
+      (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).paymentReportedAt,
+      null,
+    )
+  })
+  async function auditFixture() {
+    const service = await makeService()
+    const admin = await makeAdmin()
+    const booking = await book(service.id)
+    assert.equal((await approve(admin.access, booking.appointmentId)).status, 200)
+    return { service, admin, ...booking }
+  }
+
+  it("audit: 2 and 10 sequential reports plus 10 fresh simultaneous reports are immutable", async () => {
+    const { appointmentId, publicToken } = await auditFixture()
+    const concurrent = await Promise.all(Array.from({ length: 10 }, () => report(publicToken)))
+    assert.ok(concurrent.every(r => r.status === 200))
+    const first = concurrent[0]!.body.data
+    for (const r of concurrent) assert.deepEqual(r.body.data, first)
+    for (let i = 0; i < 10; i++) {
+      const again = await report(publicToken)
+      assert.equal(again.status, 200)
+      assert.deepEqual(again.body.data, first)
+    }
+    assert.equal(await prisma.payment.count({ where: { appointmentId } }), 1)
+    assert.equal(await prisma.adminAuditLog.count({ where: { action: "PAYMENT_PAID" } }), 0)
+  })
+
+  for (const minutes of [61, 60, 59]) {
+    it("audit: fixed clock report boundary " + minutes + " minutes", async () => {
+      const { appointmentId, publicToken } = await auditFixture()
+      const { reportStaticPixPayment } = await import("../modules/payment/payment.service.js")
+      const { digestPublicToken } = await import("../modules/booking/public-token.js")
+      const now = new Date("2026-10-01T23:30:00Z")
+      await prisma.appointment.update({ where: { id: appointmentId }, data: {
+        startsAt: new Date(+now + minutes * 60_000),
+        endsAt: new Date(+now + (minutes + 40) * 60_000),
+        reservedEndsAt: new Date(+now + (minutes + 40) * 60_000),
+        pendingExpiresAt: new Date(+now + 120 * 60_000),
+      } })
+      await prisma.payment.update({ where: { appointmentId }, data: { expiresAt: new Date(+now + 120 * 60_000) } })
+      if (minutes > 60) {
+        const result = await reportStaticPixPayment(digestPublicToken(publicToken), now)
+        assert.equal(+result.reviewExpiresAt, +now + 60_000)
+      } else {
+        await assert.rejects(reportStaticPixPayment(digestPublicToken(publicToken), now), { statusCode: 409 })
+        const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+        assert.equal(p.paymentReportedAt, null)
+        assert.equal(p.reviewExpiresAt, null)
+      }
+    })
+  }
+
+  for (const decision of ["PAID", "FAILED"] as const) {
+    it("audit: concurrent report x admin " + decision, async () => {
+      const { admin, appointmentId, publicToken } = await auditFixture()
+      const results = await Promise.all([
+        report(publicToken),
+        call("/admin/appointments/" + appointmentId + "/payment", { access: admin.access, body: { decision } }),
+      ])
+      assert.ok(results.every(r => [200, 409].includes(r.status)), JSON.stringify(results))
+      assert.equal(results[1]!.status, 200)
+      const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+      const a = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+      assert.equal(p.status, decision === "PAID" ? "PAID" : "PENDING")
+      assert.equal(a.status, decision === "PAID" ? "CONFIRMED" : "AWAITING_PAYMENT")
+      if (decision === "FAILED") assert.equal(p.paidAt, null)
+    })
+  }
+
+  it("audit: retry preserves original report and review timestamps", async () => {
+    const { admin, appointmentId, publicToken } = await auditFixture()
+    const first = (await report(publicToken)).body.data
+    const original = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal((await call("/admin/appointments/" + appointmentId + "/payment", { access: admin.access, body: { decision: "FAILED" } })).status, 200)
+    const retry = await call("/booking/requests/" + publicToken)
+    assert.equal(retry.body.data.payment.status, "PENDING")
+    assert.ok(retry.body.data.pix)
+    const again = await report(publicToken)
+    assert.equal(again.status, 200)
+    assert.deepEqual(again.body.data, first)
+    assert.equal(await prisma.payment.count({ where: { appointmentId } }), 1)
+    assert.equal(+(await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).expiresAt, +original.expiresAt)
+  })
+
+  it("audit: rejection after payment expiry releases slot immediately", async () => {
+    const { admin, appointmentId, publicToken } = await auditFixture()
+    await report(publicToken)
+    await prisma.payment.update({ where: { appointmentId }, data: { expiresAt: new Date(Date.now() - 1000) } })
+    assert.equal((await call("/admin/appointments/" + appointmentId + "/payment", { access: admin.access, body: { decision: "FAILED" } })).status, 200)
+    const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(p.status, "EXPIRED")
+    assert.equal(p.paidAt, null)
+    assert.equal((await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status, "EXPIRED")
+    assert.equal((await report(publicToken)).status, 409)
+  })
+
+  it("audit: expired review x 10 competing bookings x repeated report", async () => {
+    const { service, admin, appointmentId, publicToken } = await auditFixture()
+    await report(publicToken)
+    const past = new Date(Date.now() - 1000)
+    await prisma.payment.update({ where: { appointmentId }, data: {
+      paymentReportedAt: new Date(+past - 86_400_000), reviewExpiresAt: past,
+    } })
+    await prisma.appointment.update({ where: { id: appointmentId }, data: { pendingExpiresAt: past } })
+    const { createAppointment } = await import("../modules/booking/appointments.service.js")
+    const results = await Promise.allSettled(Array.from({ length: 10 }, () =>
+      createAppointment({ userId: admin.id, serviceId: service.id, date: nextTuesday(), startsAt: "09:00" }, new Date(), "PUBLIC")))
+    assert.equal(results.filter(r => r.status === "fulfilled").length, 1)
+    for (const r of results) if (r.status === "rejected") assert.equal(r.reason.statusCode, 409)
+    assert.equal((await report(publicToken)).status, 409)
+    assert.equal(await prisma.appointment.count({ where: { status: { in: ["PENDING", "AWAITING_PAYMENT", "CONFIRMED"] } } }), 1)
+    const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(p.status, "EXPIRED")
+    assert.equal(p.paidAt, null)
+    const detail = await call("/admin/appointments/" + appointmentId, { access: admin.access })
+    assert.equal(detail.body.data.appointment.payment.reviewOverdue, true)
+  })
+
+  it("audit: report x expiration cleanup rechecks deadline after row lock", async () => {
+    const { service, admin, appointmentId, publicToken } = await auditFixture()
+    const { createAppointment } = await import("../modules/booking/appointments.service.js")
+    const { reportStaticPixPayment } = await import("../modules/payment/payment.service.js")
+    const { digestPublicToken } = await import("../modules/booking/public-token.js")
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    const future = new Date(+payment.expiresAt + 1000)
+    let unlock!: () => void
+    let locked!: () => void
+    const lockReady = new Promise<void>(resolve => { locked = resolve })
+    const release = new Promise<void>(resolve => { unlock = resolve })
+    const blocker = prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
+      locked()
+      await release
+    }, { timeout: 15_000 })
+    await lockReady
+    // Wait for the report's SELECT FOR UPDATE to actually queue in PostgreSQL.
+    const reportPromise = reportStaticPixPayment(digestPublicToken(publicToken), new Date())
+    const waitFor = async (pattern: string) => {
+      for (let i = 0; i < 100; i++) {
+        const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE ${pattern}`
+        if (Number(rows[0]!.count) > 0) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error("Expected blocked SQL not observed: " + pattern)
+    }
+    let rival!: ReturnType<typeof createAppointment>
+    try {
+      await waitFor("%FOR UPDATE%")
+      rival = createAppointment({ userId: admin.id, serviceId: service.id, date: nextTuesday(), startsAt: "09:00" }, future, "PUBLIC")
+      // Attach rejection handler before releasing the barrier.
+      void rival.catch(() => {})
+      await waitFor("%UPDATE%appointments%")
+    } finally { unlock() }
+    await blocker
+    const reported = await reportPromise
+    assert.ok(+reported.reviewExpiresAt > +future)
+    await assert.rejects(rival, { statusCode: 409 })
+    const a = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    assert.equal(a.status, "AWAITING_PAYMENT")
+    assert.equal(+a.pendingExpiresAt!, +reported.reviewExpiresAt)
+  })
+
+  it("audit: CHECKs reject unpaired or nonpositive review windows", async () => {
+    const { appointmentId } = await auditFixture()
+    for (const data of [
+      { paymentReportedAt: new Date(), reviewExpiresAt: null },
+      { paymentReportedAt: null, reviewExpiresAt: new Date() },
+      { paymentReportedAt: new Date("2026-10-01"), reviewExpiresAt: new Date("2026-10-01") },
+    ]) {
+      await assert.rejects(prisma.payment.update({ where: { appointmentId }, data }))
+    }
+    const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(p.paymentReportedAt, null)
+    assert.equal(p.reviewExpiresAt, null)
+  })
+
+  it("audit: dynamic provider and unapproved request cannot report", async () => {
+    const { appointmentId, publicToken } = await auditFixture()
+    await prisma.payment.update({ where: { appointmentId }, data: { provider: "DYNAMIC_TEST" } })
+    assert.equal((await report(publicToken)).status, 409)
+    const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
+    assert.equal(p.paymentReportedAt, null)
+    assert.equal(p.reviewExpiresAt, null)
+    await prisma.payment.update({ where: { appointmentId }, data: { provider: "static-pix" } })
+    await prisma.appointment.update({ where: { id: appointmentId }, data: { status: "PENDING" } })
+    assert.equal((await report(publicToken)).status, 409)
+  })
+
+  it("audit: repeated rejection cannot extend a short review hold", async () => {
+    const { admin, appointmentId, publicToken } = await auditFixture()
+    const { reportStaticPixPayment, settleStaticPayment } = await import("../modules/payment/payment.service.js")
+    const { getPublicRequest } = await import("../modules/booking/public-booking.service.js")
+    const { digestPublicToken } = await import("../modules/booking/public-token.js")
+    const now = new Date()
+    await prisma.appointment.update({ where: { id: appointmentId }, data: {
+      startsAt: new Date(+now + 90 * 60_000), endsAt: new Date(+now + 130 * 60_000),
+      reservedEndsAt: new Date(+now + 130 * 60_000),
+    } })
+    const first = await reportStaticPixPayment(digestPublicToken(publicToken), now)
+    for (let i = 0; i < 2; i++) await settleStaticPayment(admin.id, appointmentId, "FAILED", now)
+    const a = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
+    assert.equal(+a.pendingExpiresAt!, +first.reviewExpiresAt)
+    const view = await getPublicRequest(publicToken, now)
+    assert.equal(view.payment!.expiresAt, first.reviewExpiresAt.toISOString())
+    const repeated = await reportStaticPixPayment(digestPublicToken(publicToken), new Date(+now + 60_000))
+    assert.equal(+repeated.reportedAt, +first.reportedAt)
+    assert.equal(+repeated.reviewExpiresAt, +first.reviewExpiresAt)
+    await assert.rejects(reportStaticPixPayment(digestPublicToken(publicToken), first.reviewExpiresAt), { statusCode: 409 })
+  })
+
+  it("audit: expired review is discoverable in admin EXPIRED filter before cleanup", async () => {
+    const { admin, appointmentId, publicToken } = await auditFixture()
+    await report(publicToken)
+    const past = new Date(Date.now() - 1000)
+    await prisma.payment.update({ where: { appointmentId }, data: { paymentReportedAt: new Date(+past - 86_400_000), reviewExpiresAt: past } })
+    await prisma.appointment.update({ where: { id: appointmentId }, data: { pendingExpiresAt: past } })
+    const response = await call("/admin/agenda?from=" + nextTuesday() + "&status=EXPIRED", { access: admin.access })
+    assert.equal(response.status, 200)
+    const item = response.body.data.appointments.find((a: any) => a.id === appointmentId)
+    assert.ok(item)
+    assert.equal(item.payment.reviewOverdue, true)
+  })
 
 })

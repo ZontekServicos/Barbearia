@@ -96,14 +96,36 @@ export const BookingRules = {
   paymentWindowMinutes: 15,
 
   /**
-   * Janela do Pix ESTÁTICO — o dobro, porque o gargalo é humano.
+   * Prazo para o CLIENTE pagar o Pix estático e informar que pagou.
    *
-   * Aqui ninguém nos notifica: o cliente paga e alguém da barbearia precisa
-   * abrir o extrato, encontrar o lançamento e confirmar no painel. Entre
-   * atender uma pessoa e conferir o celular, 15 minutos derrubam reservas
-   * legitimamente pagas. 30 dão margem sem prender a agenda por horas.
+   * Duas horas, não trinta minutos: o cliente pode estar no trabalho, sem o
+   * app do banco à mão, ou simplesmente decidir pagar mais tarde. Prazo curto
+   * derrubava reservas que seriam pagas.
+   *
+   * Este prazo cobre só até a DECLARAÇÃO. A partir dela vale o prazo de
+   * conferência (ver staticPixReviewWindowHours), porque o gargalo deixa de ser
+   * o cliente e passa a ser a barbearia.
    */
-  staticPixPaymentWindowMinutes: 30,
+  staticPixPaymentWindowMinutes: 120,
+
+  /**
+   * Prazo para a BARBEARIA conferir um Pix declarado pelo cliente.
+   *
+   * Vinte e quatro horas porque conferir extrato é trabalho humano que não
+   * acontece no meio de um corte. Antes disso, a janela de pagamento vencia
+   * enquanto o dinheiro já estava na conta, liberando o horário de quem tinha
+   * pagado — o defeito que esta separação resolve.
+   */
+  staticPixReviewWindowHours: 24,
+
+  /**
+   * Folga mínima entre o fim da conferência e o início do atendimento.
+   *
+   * A conferência não pode invadir a hora do corte: descobrir que o pagamento
+   * não existe quando o cliente já está na cadeira não serve para nada. O prazo
+   * de conferência termina, no mais tarde, esta folga antes do atendimento.
+   */
+  minimumReviewBufferBeforeAppointmentMinutes: 60,
 
   /**
    * Quanto cobrar para confirmar.
@@ -136,6 +158,39 @@ export function paymentAmountCents(servicePriceCents: number): number {
   // O sinal nunca passa do preço: um piso alto num serviço barato viraria
   // cobrança maior que o serviço.
   return Math.min(servicePriceCents, Math.max(share, BookingRules.depositMinimumCents))
+}
+
+/**
+ * Até quando a barbearia pode conferir um Pix declarado agora.
+ *
+ *   min(agora + 24h, início do atendimento − 60min)
+ *
+ * O menor dos dois vence: 24h dá tempo de olhar o extrato, e a folga antes do
+ * atendimento garante que a conferência aconteça enquanto ainda dá para avisar
+ * alguém. Um ponto só decide isto, para os números não se espalharem.
+ *
+ * Pode devolver um instante NO PASSADO quando o atendimento está perto demais.
+ * Quem chama trata esse caso — ver `canReviewPayment`; inventar prazo positivo
+ * aqui esconderia a decisão.
+ */
+export function paymentReviewDeadline(reportedAt: Date, startsAt: Date): Date {
+  const byReviewWindow =
+    reportedAt.getTime() + BookingRules.staticPixReviewWindowHours * 60 * 60_000
+  const beforeAppointment =
+    startsAt.getTime() - BookingRules.minimumReviewBufferBeforeAppointmentMinutes * 60_000
+  return new Date(Math.min(byReviewWindow, beforeAppointment))
+}
+
+/**
+ * Existe janela de conferência útil se o pagamento for declarado agora?
+ *
+ * `false` quando o atendimento está a menos de uma folga de distância: aceitar a
+ * declaração ali criaria prazo nulo ou negativo, e o cliente ficaria achando que
+ * avisou quando ninguém teria tempo de conferir. Nesse caso a tela orienta falar
+ * com a barbearia, que é o único caminho honesto de última hora.
+ */
+export function canReviewPayment(reportedAt: Date, startsAt: Date): boolean {
+  return paymentReviewDeadline(reportedAt, startsAt).getTime() > reportedAt.getTime()
 }
 
 /**

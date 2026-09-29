@@ -266,7 +266,16 @@ export default function Agenda() {
                 {appointment.payment?.canConfirmManually && (
                   <p className="w-full text-xs font-medium text-amber-400 flex items-center gap-1.5">
                     <Wallet className="h-3.5 w-3.5 shrink-0" />
-                    Pix de R$ {appointment.payment.amountFormatted} a conferir — abrir para confirmar
+                    {appointment.payment.reportedAt
+                      ? `Cliente informou o Pix de R$ ${appointment.payment.amountFormatted} — conferir`
+                      : `Pix de R$ ${appointment.payment.amountFormatted} a conferir — abrir para confirmar`}
+                  </p>
+                )}
+                {/* Declarado e sem decisão no prazo: não pode passar batido. */}
+                {appointment.payment?.reviewOverdue && (
+                  <p className="w-full text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                    <Wallet className="h-3.5 w-3.5 shrink-0" />
+                    Pix informado sem conferência — verificar extrato
                   </p>
                 )}
                 {appointment.payment?.windowClosed && appointment.payment.status === 'PENDING' && (
