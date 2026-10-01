@@ -332,8 +332,17 @@ export function isPaymentWindowClosed(
   appointment: { status: string; pendingExpiresAt: Date | null },
   now: Date,
 ): boolean {
+  /**
+   * Os DOIS estados que seguram horário com prazo entram aqui.
+   *
+   * `PENDING` passou a ter cobrança desde que o Pix nasce com a solicitação, e
+   * ali `pendingExpiresAt` é justamente o prazo para pagar. Deixá-lo de fora
+   * fazia a janela nunca "fechar" nesse estado — ou seja, aceitaria declaração
+   * e confirmação de uma reserva já caducada, com o horário possivelmente já
+   * vendido para outra pessoa.
+   */
   return (
-    appointment.status === "AWAITING_PAYMENT" &&
+    (appointment.status === "AWAITING_PAYMENT" || appointment.status === "PENDING") &&
     appointment.pendingExpiresAt !== null &&
     appointment.pendingExpiresAt.getTime() <= now.getTime()
   )
@@ -389,7 +398,19 @@ export async function settleStaticPayment(
     if (payment.status === "PAID") {
       throw AppError.conflict(ErrorCodes.CONFLICT, "Este pagamento já foi confirmado.")
     }
-    if (appointment.status !== "AWAITING_PAYMENT") {
+    /**
+     * De onde a confirmação pode partir.
+     *
+     * `PENDING` é o caminho normal desde que o Pix passou a nascer com a
+     * solicitação: a barbearia vê o dinheiro no extrato e confirma o pagamento
+     * E o agendamento no MESMO ato — é a ação "Confirmar pagamento e
+     * agendamento", e é esta transação que a torna indivisível.
+     *
+     * `AWAITING_PAYMENT` continua aceito porque reservas criadas antes dessa
+     * mudança ficaram nesse estado. Recusá-las aqui deixaria dinheiro já
+     * recebido sem nenhuma forma de confirmar.
+     */
+    if (appointment.status !== "PENDING" && appointment.status !== "AWAITING_PAYMENT") {
       throw AppError.conflict(
         ErrorCodes.CONFLICT,
         "Este agendamento não está aguardando pagamento.",
@@ -479,7 +500,7 @@ export interface PaymentReportResult {
  * O cliente declara que fez o Pix: "já fiz o Pix".
  *
  * NÃO É CONFIRMAÇÃO. O pagamento continua PENDING e o agendamento continua
- * AWAITING_PAYMENT. A única autoridade para PAID/CONFIRMED continua sendo a
+ * PENDING (AWAITING_PAYMENT só existe em reservas legadas). A única autoridade para PAID/CONFIRMED continua sendo a
  * barbearia, depois de ver o dinheiro no extrato (ver `settleStaticPayment`).
  *
  * O que a declaração muda é DE QUEM a agenda está esperando. Antes dela, o prazo
@@ -523,7 +544,13 @@ export async function reportStaticPixPayment(
       throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento não aguarda Pix.")
     }
 
-    if (current.status !== "AWAITING_PAYMENT" || payment.status !== "PENDING") {
+    // `PENDING` é o estado normal de quem vai declarar: o Pix nasce com a
+    // solicitação e a pessoa paga antes de qualquer decisão da barbearia.
+    // `AWAITING_PAYMENT` segue valendo para as reservas anteriores à mudança.
+    if (
+      (current.status !== "AWAITING_PAYMENT" && current.status !== "PENDING") ||
+      payment.status !== "PENDING"
+    ) {
       throw AppError.conflict(ErrorCodes.CONFLICT, "Este agendamento não está aguardando pagamento.")
     }
     if (isPaymentWindowClosed(current, now) || (payment.reviewExpiresAt && payment.reviewExpiresAt <= now)) {

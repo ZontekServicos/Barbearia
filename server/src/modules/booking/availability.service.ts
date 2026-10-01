@@ -10,6 +10,14 @@ import { BookingRules, reservedMinutesFor } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { findBlocksOverlapping, getDayWindow } from "./schedule.service.js"
 import {
+  blockedRange,
+  computeSlotGrid,
+  overlaps,
+  type SlotGridEntry,
+  type SlotUnavailableReason,
+  type TaggedBusyInterval,
+} from "./availability.engine.js"
+import {
   computeSlotStarts,
   windowsFromBusinessHours,
   type BusyInterval,
@@ -54,8 +62,29 @@ export interface AvailabilityResult {
   /** Janelas de atendimento do dia, em hora local ("09:00"–"12:00"). */
   windows: Array<{ opensAt: string; closesAt: string }>
   slots: AvailableSlot[]
+  /**
+   * Grade do dia INTEIRA: todo início da grade, livre ou não.
+   *
+   * Existe para a tela mostrar o horário ocupado em cinza em vez de escondê-lo.
+   * Sumir com o que está ocupado deixa buracos na grade que parecem defeito, e
+   * esconde do cliente a informação mais útil que ele tem — como o dia está.
+   *
+   * O motivo NÃO vem aqui. Saber que às 15:00 existe um agendamento já é dado
+   * de outra pessoa; a versão pública diz apenas que não pode ser escolhido.
+   */
+  grid: PublicGridSlot[]
   /** Por que não há horários, quando a lista vem vazia. */
   reason: "CLOSED" | "PAST_DATE" | "TOO_FAR" | "FULLY_BOOKED" | null
+}
+
+/** Um início da grade, como o PÚBLICO o vê: sem razão, sem dado de ninguém. */
+export interface PublicGridSlot {
+  /** "09:00" — hora local da barbearia. */
+  startsAtClock: string
+  endsAtClock: string
+  startsAt: string
+  /** `false` desenha o botão cinza e desabilitado. E é tudo que se revela. */
+  available: boolean
 }
 
 /**
@@ -151,6 +180,7 @@ export async function getAvailability(
     open: false,
     windows: [],
     slots: [],
+    grid: [],
     reason,
   })
 
@@ -183,6 +213,17 @@ export async function getAvailability(
     findBlocksOverlapping(dayStart, dayEnd),
   ])
 
+  const taggedBusy: TaggedBusyInterval[] = [
+    ...appointments.map(appointment => ({
+      ...toDayMinutes(dayStart, appointment.startsAt, appointment.reservedEndsAt),
+      kind: "APPOINTMENT" as const,
+    })),
+    ...blocks.map(block => ({
+      ...toDayMinutes(dayStart, block.startsAt, block.endsAt),
+      kind: "BLOCK" as const,
+    })),
+  ]
+
   const busy: BusyInterval[] = [
     // Cada reserva ocupa o intervalo operacional congelado nela — que pode ser
     // maior que a duração do serviço. Ler `reservedEndsAt` (e não `endsAt`)
@@ -212,6 +253,36 @@ export async function getAvailability(
       options.applyDisplayLimit === false ? undefined : BookingRules.maxDailyStartOptions,
   })
 
+  /**
+   * Grade completa do dia, para a tela poder mostrar o que NÃO está livre.
+   *
+   * Derivada em paralelo, nunca no lugar de `starts`: quem decide o que é
+   * reservável continua sendo `computeSlotStarts`, e é a lista dele que a
+   * criação de agendamento valida. Aqui só se descreve.
+   *
+   * Sem limite de exibição: o teto de `maxDailyStartOptions` existe para não
+   * despejar cinquenta botões de escolha, e cortar a grade pela metade deixaria
+   * buracos sem explicação no meio do dia.
+   */
+  const grid = computeSlotGrid({
+    windows,
+    busy: taggedBusy,
+    durationMinutes: service.durationMinutes,
+    reservedMinutes: base.reservedMinutes,
+    slotIntervalMinutes: BookingRules.baseSlotMinutes,
+    earliestStartMinute,
+    adaptive: BookingRules.adaptiveSchedulingEnabled,
+  })
+
+  /**
+   * Só o que é realmente oferecível entra como disponível na grade.
+   *
+   * `starts` já passou pelo teto de exibição; um início livre que ficou fora do
+   * teto aparece na grade como indisponível em vez de clicável, para a tela
+   * nunca oferecer um botão que a validação recusaria.
+   */
+  const offered = new Set(starts)
+
   const slots: AvailableSlot[] = starts.map(startMinute => {
     const startsAt = shopWallClockToInstant(dateISO, startMinute)
     return {
@@ -231,6 +302,13 @@ export async function getAvailability(
       closesAt: minutesToClock(window.endMinute),
     })),
     slots,
+    grid: grid.map(entry => ({
+      startsAtClock: minutesToClock(entry.startMinute),
+      endsAtClock: minutesToClock(entry.startMinute + service.durationMinutes),
+      startsAt: shopWallClockToInstant(dateISO, entry.startMinute).toISOString(),
+      // Livre E realmente oferecido: ver `offered`.
+      available: entry.available && offered.has(entry.startMinute),
+    })),
     reason: slots.length === 0 ? "FULLY_BOOKED" : null,
   }
 }
@@ -261,4 +339,163 @@ export async function listBookableStartMinutes(
 function clockToMinutesLocal(clock: string): number {
   const [hour, minute] = clock.split(":").map(Number)
   return hour! * 60 + minute!
+}
+
+// ---------------------------------------------------------------------------
+// Grade administrativa — com motivo
+// ---------------------------------------------------------------------------
+
+/**
+ * Um início da grade como a BARBEARIA o vê.
+ *
+ * Aqui o motivo existe, porque a ação depende dele: bloqueio manual pode ser
+ * liberado, agendamento não — esse passa pelo cancelamento, que avisa o cliente
+ * e devolve o horário pela regra certa. Expor os dois como "liberar" convidaria
+ * a apagar a reserva de alguém com um clique.
+ */
+export interface AdminGridSlot {
+  startsAtClock: string
+  endsAtClock: string
+  startsAt: string
+  available: boolean
+  reason: SlotUnavailableReason | null
+  /** Bloqueio manual que cobre este início. É o único que pode ser liberado. */
+  blockId: string | null
+  blockReason: string | null
+  /** Agendamento que cobre este início, para a tela levar ao detalhe dele. */
+  appointmentId: string | null
+}
+
+export interface AdminAvailability {
+  date: string
+  serviceId: string
+  serviceName: string
+  durationMinutes: number
+  reservedMinutes: number
+  slotIntervalMinutes: number
+  open: boolean
+  windows: Array<{ opensAt: string; closesAt: string }>
+  grid: AdminGridSlot[]
+}
+
+/**
+ * Grade do dia para a gestão de disponibilidade.
+ *
+ * Usa a MESMA engine da grade pública — `computeSlotGrid` — para as duas telas
+ * não divergirem. Se o público vê cinza, a barbearia vê cinza com o motivo; não
+ * existe caminho em que uma mostra livre e a outra não.
+ *
+ * O teto de exibição não se aplica: quem administra precisa do dia inteiro.
+ */
+export async function getAdminAvailability(
+  dateISO: string,
+  serviceId: string,
+  now: Date = new Date(),
+): Promise<AdminAvailability> {
+  const service = await getBookableService(serviceId)
+  const reservedMinutes = reservedMinutesFor(
+    service.durationMinutes,
+    service.bufferBeforeMinutes,
+    service.bufferAfterMinutes,
+  )
+  const shell = {
+    date: dateISO,
+    serviceId: service.id,
+    serviceName: service.name,
+    durationMinutes: service.durationMinutes,
+    reservedMinutes,
+    slotIntervalMinutes: BookingRules.baseSlotMinutes,
+  }
+
+  const day = await getDayWindow(dateISO)
+  const windows: OpenWindow[] = day ? windowsFromBusinessHours(day) : []
+  if (windows.length === 0) {
+    return { ...shell, open: false, windows: [], grid: [] }
+  }
+
+  const dayStart = shopWallClockToInstant(dateISO, 0)
+  const dayEnd = shopWallClockToInstant(addDaysToShopDate(dateISO, 1), 0)
+
+  const [appointments, blocks] = await Promise.all([
+    prisma.appointment.findMany({
+      where: {
+        ...blockingAppointmentFilter(now),
+        startsAt: { lt: dayEnd },
+        reservedEndsAt: { gt: dayStart },
+      },
+      // O id vem para a tela poder levar ao detalhe do agendamento. Nome,
+      // telefone e serviço do cliente NÃO: a grade é sobre ocupação, e o
+      // detalhe já mostra o que a barbearia precisa saber.
+      select: { id: true, startsAt: true, reservedEndsAt: true },
+    }),
+    findBlocksOverlapping(dayStart, dayEnd),
+  ])
+
+  const taggedBusy: TaggedBusyInterval[] = [
+    ...appointments.map(appointment => ({
+      ...toDayMinutes(dayStart, appointment.startsAt, appointment.reservedEndsAt),
+      kind: "APPOINTMENT" as const,
+    })),
+    ...blocks.map(block => ({
+      ...toDayMinutes(dayStart, block.startsAt, block.endsAt),
+      kind: "BLOCK" as const,
+    })),
+  ]
+
+  const earliestStartMinute = Math.ceil(
+    (now.getTime() + BookingRules.minimumAdvanceMinutes * 60_000 - dayStart.getTime()) / 60_000,
+  )
+
+  const grid: SlotGridEntry[] = computeSlotGrid({
+    windows,
+    busy: taggedBusy,
+    durationMinutes: service.durationMinutes,
+    reservedMinutes,
+    slotIntervalMinutes: BookingRules.baseSlotMinutes,
+    earliestStartMinute,
+    adaptive: BookingRules.adaptiveSchedulingEnabled,
+  })
+
+  /** Qual período cobre o intervalo reservado a partir deste início. */
+  const covering = (startMinute: number) => {
+    const blocked = blockedRange(
+      startMinute,
+      reservedMinutes,
+      service.bufferBeforeMinutes,
+      service.bufferAfterMinutes,
+    )
+    const appointment = appointments.find(entry => {
+      const span = toDayMinutes(dayStart, entry.startsAt, entry.reservedEndsAt)
+      return overlaps(blocked.startMinute, blocked.endMinute, span.startMinute, span.endMinute)
+    })
+    const block = blocks.find(entry => {
+      const span = toDayMinutes(dayStart, entry.startsAt, entry.endsAt)
+      return overlaps(blocked.startMinute, blocked.endMinute, span.startMinute, span.endMinute)
+    })
+    return { appointment, block }
+  }
+
+  return {
+    ...shell,
+    open: true,
+    windows: windows.map(window => ({
+      opensAt: minutesToClock(window.startMinute),
+      closesAt: minutesToClock(window.endMinute),
+    })),
+    grid: grid.map(entry => {
+      const { appointment, block } = entry.available
+        ? { appointment: undefined, block: undefined }
+        : covering(entry.startMinute)
+      return {
+        startsAtClock: minutesToClock(entry.startMinute),
+        endsAtClock: minutesToClock(entry.startMinute + service.durationMinutes),
+        startsAt: shopWallClockToInstant(dateISO, entry.startMinute).toISOString(),
+        available: entry.available,
+        reason: entry.reason,
+        blockId: entry.reason === "BLOCK" ? (block?.id ?? null) : null,
+        blockReason: entry.reason === "BLOCK" ? (block?.reason ?? null) : null,
+        appointmentId: entry.reason === "APPOINTMENT" ? (appointment?.id ?? null) : null,
+      }
+    }),
+  }
 }

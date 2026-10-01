@@ -27,7 +27,7 @@ import { listBookableStartMinutes } from "./availability.service.js"
 import { fitsInAnyWindow, windowsFromBusinessHours } from "./availability.engine.js"
 import { getDayWindow } from "./schedule.service.js"
 import type { Prisma } from "../../generated/prisma/client.js"
-import { lockUser } from "../../utils/locks.js"
+import { lockKey, lockUser } from "../../utils/locks.js"
 import { generateUniquePublicReference } from "./public-reference.js"
 import {
   createPaymentForAppointment,
@@ -158,6 +158,11 @@ export async function createAppointment(
 
   try {
     const appointment = await prisma.$transaction(async tx => {
+      // ScheduleBlock lives in another table, so the appointment EXCLUDE
+      // constraint cannot arbitrate this race by itself. A transaction-scoped
+      // lock shared with schedule.service serializes all writes for the day;
+      // the winner is committed and the loser rechecks the interval below.
+      await lockKey(tx, `booking-day:${input.date}`)
       const userId = beforeInsert ? await beforeInsert(tx) : input.userId;
       // Solicitações pendentes vencidas que cobrem este intervalo são
       // liberadas AQUI, na mesma transação do insert e restritas ao período
@@ -188,6 +193,16 @@ export async function createAppointment(
         })
       }
 
+      const blocked = await tx.scheduleBlock.count({
+        where: { startsAt: { lt: reservedEndsAt }, endsAt: { gt: startsAt } },
+      })
+      if (blocked > 0) {
+        throw AppError.conflict(
+          ErrorCodes.CONFLICT,
+          "Esse horário acabou de ser bloqueado. Escolha outro.",
+        )
+      }
+
       /**
        * A referência pública nasce COM a reserva.
        *
@@ -204,7 +219,7 @@ export async function createAppointment(
         (await tx.appointment.count({ where: { publicReference: candidate } })) > 0,
       )
 
-      return tx.appointment.create({
+      const created = await tx.appointment.create({
       data: {
         userId,
         serviceId: service.id,
@@ -229,6 +244,45 @@ export async function createAppointment(
           : {}),
         },
       })
+
+      /**
+       * O Pix nasce COM a solicitação — e só no Pix estático.
+       *
+       * Antes a cobrança só era aberta na aprovação, e a pessoa que acabara de
+       * pedir horário via "aguardando aprovação" sem nada para fazer. Quem quer
+       * pagar na hora, enquanto está com o celular na mão, tinha de voltar
+       * depois — e muitos não voltam. Agora o QR está na tela de sucesso.
+       *
+       * Mostrar um QR estático não cobra ninguém: é a chave da barbearia com um
+       * valor sugerido, e só sai dinheiro se a pessoa decidir pagar. O
+       * agendamento continua PENDING até a barbearia conferir — ver o QR não
+       * reserva nada além do que a solicitação já reservava.
+       *
+       * O provedor DINÂMICO fica de fora de propósito. Ali abrir a cobrança é
+       * efeito externo de verdade, com identificador de terceiro e dinheiro
+       * capturável; criá-la antes da aprovação seria cobrar quem ainda pode ser
+       * recusado, e uma recusa passaria a exigir devolução — exatamente o que
+       * este fluxo não faz automaticamente. Esse caminho segue aprovando antes
+       * de cobrar.
+       *
+       * O prazo da cobrança é o MESMO `pendingExpiresAt` da reserva: enquanto o
+       * horário vale, o Pix vale. Dois relógios diferentes para a mesma espera
+       * é como alguém paga um horário que já caiu.
+       */
+      if (
+        requiresApproval &&
+        paymentMethod === "STATIC_PIX" &&
+        paymentAmountCents(created.servicePriceCents) > 0
+      ) {
+        await createPaymentForAppointment(
+          tx,
+          { ...created, publicReference },
+          { provider: STATIC_PIX_PROVIDER },
+          created.pendingExpiresAt!,
+        )
+      }
+
+      return created
     })
 
     return { appointment: toPublicAppointment(appointment), publicToken }
@@ -523,6 +577,12 @@ export async function decidePendingRequest(
   appointmentId: string,
   decision: "CONFIRMED" | "REJECTED",
   now?: Date,
+  /**
+   * `acknowledgePaidReport` é o "sim, recusar mesmo assim" de quem já viu que o
+   * cliente declarou pagamento. Sem ele, a recusa é barrada — ver a guarda
+   * adiante.
+   */
+  options: { acknowledgePaidReport?: boolean } = {},
 ): Promise<AdminAppointment> {
   const decidedAt = now ?? new Date()
 
@@ -560,7 +620,10 @@ export async function decidePendingRequest(
      */
     const pending = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
-      const current = await tx.appointment.findUnique({ where: { id: appointmentId } })
+      const current = await tx.appointment.findUnique({
+        where: { id: appointmentId },
+        include: { payment: true },
+      })
       if (!current) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
       if (current.status !== "PENDING") {
         throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
@@ -571,25 +634,46 @@ export async function decidePendingRequest(
       const reserved = await generateUniquePublicReference(async candidate =>
         (await tx.appointment.count({ where: { publicReference: candidate } })) > 0,
       )
-      return tx.appointment.update({
+      await tx.appointment.update({
         where: { id: appointmentId },
         data: { publicReference: reserved },
       })
+      return { ...current, publicReference: reserved }
     })
     const reference = pending.publicReference!
 
     /**
-     * Só cobra quando existe valor a cobrar.
+     * A cobrança pode JÁ existir: no Pix estático ela nasce com a solicitação.
      *
-     * Um serviço de preço zero é legítimo (cortesia, retoque incluso) — o
-     * catálogo aceita `priceCents: 0`. Abrir cobrança de zero violava o CHECK
-     * `amount_cents > 0` da tabela, a aprovação morria com erro interno e o
-     * pedido ficava preso em PENDING: a barbearia não conseguia aprovar de jeito
-     * nenhum. Sem valor, aprovar confirma direto, como numa instalação sem
-     * pagamento configurado.
+     * Nesse caso não se abre outra — e, acima de tudo, não se aprova "no seco".
+     * Aprovar sem ninguém ter olhado o extrato confirmaria o horário de quem não
+     * pagou, que é exatamente o que este fluxo existe para evitar. A única porta
+     * com dinheiro envolvido é "Confirmar pagamento e agendamento", que marca
+     * pagamento e agendamento no MESMO ato (ver `settleStaticPayment`). Duas
+     * portas para o mesmo destino é como um agendamento termina confirmado sem
+     * pagamento.
+     *
+     * Já PAGO e ainda PENDING acontece quando a confirmação chegou antes da
+     * decisão. Aí aprovar é legítimo e segue adiante sem nova cobrança.
      */
-    const amountCents = paymentAmountCents(pending.servicePriceCents)
-    if (amountCents > 0 && paymentMethod !== "NONE") {
+    if (pending.payment) {
+      if (pending.payment.status !== "PAID") {
+        throw AppError.conflict(
+          ErrorCodes.CONFLICT,
+          'Confira o Pix para confirmar: use "Confirmar pagamento e agendamento".',
+        )
+      }
+      /**
+       * Sem cobrança ainda: ou a instalação não tem pagamento, ou é uma reserva
+       * anterior a esta mudança (criada quando o Pix só nascia na aprovação).
+       *
+       * Só cobra quando existe valor a cobrar. Preço zero é legítimo (cortesia,
+       * retoque incluso) e o catálogo aceita; abrir cobrança de zero violava o
+       * CHECK `amount_cents > 0`, a aprovação morria com erro interno e o pedido
+       * ficava preso em PENDING — a barbearia não conseguia aprovar de jeito
+       * nenhum. Sem valor, aprovar confirma direto.
+       */
+    } else if (paymentAmountCents(pending.servicePriceCents) > 0 && paymentMethod !== "NONE") {
       const expiresAt = new Date(
         decidedAt.getTime() + paymentWindowMinutesFor(paymentMethod) * 60_000,
       )
@@ -621,10 +705,34 @@ export async function decidePendingRequest(
     const actor = await tx.user.findUnique({ where: { id: actorId } })
     if (actor?.role !== "ADMIN" || actor.status !== "ACTIVE") throw AppError.forbidden()
     await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId}::uuid FOR UPDATE`
-    const appointment = await tx.appointment.findUnique({where:{id:appointmentId}})
+    const appointment = await tx.appointment.findUnique({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
     if (!appointment) throw AppError.notFound(ErrorCodes.NOT_FOUND, "Solicitação não encontrada.")
     if (appointment.status !== "PENDING" || !appointment.pendingExpiresAt || appointment.pendingExpiresAt <= decidedAt) {
       throw AppError.conflict(ErrorCodes.CONFLICT, "Esta solicitação já foi decidida ou expirou.")
+    }
+
+    /**
+     * Recusar quem já disse ter pagado exige confirmação explícita.
+     *
+     * A diferença entre recusar um pedido qualquer e recusar um pedido com Pix
+     * declarado é dinheiro de outra pessoa. Um clique a mais aqui é barato; já
+     * ter recusado, não — e NÃO existe devolução automática neste sistema, então
+     * desfazer depende de a barbearia transferir de volta por fora.
+     *
+     * A guarda vale tanto para declaração do cliente (`paymentReportedAt`) como
+     * para pagamento já confirmado (`PAID`): nos dois casos há dinheiro em jogo.
+     */
+    const moneyAtStake =
+      appointment.payment != null &&
+      (appointment.payment.paymentReportedAt != null || appointment.payment.status === "PAID")
+    if (decision === "REJECTED" && moneyAtStake && !options.acknowledgePaidReport) {
+      throw AppError.conflict(
+        ErrorCodes.CONFLICT,
+        "Este cliente informou que já pagou. Confirme que quer recusar mesmo assim.",
+      )
     }
 
     /**
@@ -663,7 +771,49 @@ export async function decidePendingRequest(
       )
     }
 
-    await tx.adminAuditLog.create({data:{actorId,targetUserId:appointment.userId,action: `APPOINTMENT_REQUEST_${decision}`,metadata:{appointmentId,from:"PENDING",to:target}}})
+    /**
+     * Recusa NÃO devolve dinheiro.
+     *
+     * Não existe devolução automática aqui, e não deve existir por acidente: o
+     * Pix estático cai direto na conta da barbearia, e só ela pode devolver, por
+     * fora. Gravar qualquer coisa parecida com "reembolsado" seria afirmar um
+     * fato que ninguém verificou.
+     *
+     * Cobrança ainda não paga vira CANCELED — ninguém deve pagar um horário
+     * recusado, e um QR vivo apontando para reserva morta é convite a isso.
+     * Cobrança PAGA fica PAID de propósito: o dinheiro entrou, e apagar esse
+     * registro esconderia que existe devolução pendente.
+     */
+    if (decision === "REJECTED" && appointment.payment && appointment.payment.status !== "PAID") {
+      await tx.payment.update({
+        where: { id: appointment.payment.id },
+        data: { status: "CANCELED" },
+      })
+    }
+
+    await tx.adminAuditLog.create({data:{actorId,targetUserId:appointment.userId,action: `APPOINTMENT_REQUEST_${decision}`,metadata:{
+      appointmentId,
+      from: "PENDING",
+      to: target,
+      /**
+       * Recusa com dinheiro em jogo fica registrada com o que havia: quanto,
+       * em que estado, e se o cliente tinha declarado. É esse registro que
+       * sustenta uma devolução feita depois, por fora — porque ela não acontece
+       * aqui.
+       */
+      ...(decision === "REJECTED" && moneyAtStake && appointment.payment
+        ? {
+            rejectedWithPayment: {
+              amountCents: appointment.payment.amountCents,
+              paymentStatus: appointment.payment.status,
+              refunded: false,
+              ...(appointment.payment.paymentReportedAt
+                ? { paymentReportedAt: appointment.payment.paymentReportedAt.toISOString() }
+                : {}),
+            },
+          }
+        : {}),
+    }}})
   })
   logger.info("Solicitação de agendamento decidida", { actorId, appointmentId, to: decision })
   return getAppointmentForAdmin(appointmentId)

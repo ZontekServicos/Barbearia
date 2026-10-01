@@ -45,6 +45,23 @@ export interface AvailableSlot {
   reservedMinutes: number
 }
 
+/**
+ * Um início da grade do dia — livre ou não.
+ *
+ * Serve para a tela mostrar o horário ocupado em CINZA em vez de escondê-lo.
+ * Sumir com o que está ocupado deixa buracos na grade que parecem defeito, e
+ * esconde do cliente a informação mais útil que ele tem: como o dia está.
+ *
+ * O MOTIVO não vem de propósito. Saber que às 15:00 existe um agendamento já é
+ * dado de outra pessoa; aqui só se sabe que não dá para escolher.
+ */
+export interface GridSlot {
+  startsAtClock: string
+  endsAtClock: string
+  startsAt: string
+  available: boolean
+}
+
 export interface Availability {
   date: string
   serviceId: string
@@ -57,6 +74,11 @@ export interface Availability {
   /** Janelas de atendimento do dia, ex.: 09:00–12:00 e 14:00–20:00. */
   windows: Array<{ opensAt: string; closesAt: string }>
   slots: AvailableSlot[]
+  /**
+   * Grade do dia inteira. `slots` continua sendo a lista do que pode ser
+   * reservado — a grade apenas descreve, e os dois nunca se contradizem.
+   */
+  grid: GridSlot[]
   reason: "CLOSED" | "PAST_DATE" | "TOO_FAR" | "FULLY_BOOKED" | null
 }
 

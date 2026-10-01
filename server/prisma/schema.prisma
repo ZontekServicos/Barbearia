@@ -49,6 +49,7 @@ model User {
   appointments    Appointment[]
   actionsPerfomed AdminAuditLog[] @relation("AdminActor")
   actionsReceived AdminAuditLog[] @relation("AdminTarget")
+  scheduleBlocks  ScheduleBlock[] @relation("ScheduleBlockAuthor")
 
   @@index([status])
   @@index([role])
@@ -122,9 +123,16 @@ model ScheduleBlock {
   startsAt  DateTime @map("starts_at") @db.Timestamptz(3)
   endsAt    DateTime @map("ends_at") @db.Timestamptz(3)
   reason    String   @db.VarChar(160)
+  /// Quem bloqueou. Nulo nos bloqueios criados antes deste campo existir —
+  /// apagá-los para "limpar" seria destruir agenda real por causa de metadado.
+  /// `SetNull` na remoção do administrador: o bloqueio continua valendo mesmo
+  /// que a conta saia, porque o horário segue indisponível de verdade.
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("ScheduleBlockAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([startsAt, endsAt])
+  @@index([createdById])
   @@map("schedule_blocks")
 }
 
@@ -291,7 +299,7 @@ model Payment {
   /// Quando o CLIENTE declarou ter pago ("já fiz o Pix").
   ///
   /// NÃO é confirmação: o pagamento segue PENDING e o agendamento segue
-  /// AWAITING_PAYMENT. O que muda é quem a agenda está esperando — deixa de ser
+  /// PENDING (AWAITING_PAYMENT só em reservas legadas). O que muda é quem a agenda está esperando — deixa de ser
   /// o cliente e passa a ser a barbearia. Preenchido uma única vez; cliques
   /// repetidos não o movem nem esticam a conferência.
   paymentReportedAt DateTime? @map("payment_reported_at") @db.Timestamptz(3)

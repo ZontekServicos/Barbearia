@@ -80,10 +80,47 @@ Duas medidas:
 
 O backend não serve os arquivos do frontend. Configurar/verificar separadamente hospedagem SPA, fallback das rotas do React e build do frontend. Publicação no GitHub não comprova que esse serviço frontend foi implantado.
 
-**Fallback de SPA é requisito, não detalhe.** O acompanhamento do pedido vive em
-`/agendamento/<token>` — um link que o cliente abre dias depois, direto, sem
-passar pela raiz. Sem o fallback para `index.html`, essa URL responde 404 na
-hospedagem e a pessoa não consegue ver nem pagar o próprio agendamento.
+### Fallback de SPA é requisito, não detalhe
+
+O acompanhamento do pedido vive em `/agendamento/<token>` — um link que o cliente
+abre dias depois, direto, sem passar pela raiz. As rotas do React Router só
+existem no navegador: o host recebe um GET de verdade nesse caminho e, se não
+souber que deve entregar `index.html`, responde 404 **antes** de o React iniciar.
+Falha ao atualizar a página, ao abrir em aba nova e ao voltar pelo link.
+
+O repositório passa a declarar isso num `Caddyfile` na raiz — Caddy é o servidor
+estático que o builder do Railway usa, então não há servidor Node extra. O que
+ele define:
+
+| Caminho | Comportamento |
+| --- | --- |
+| `/api`, `/api/*` | **404 real.** A API é outro serviço; devolver `index.html` faria o cliente receber HTML onde espera JSON |
+| `/assets/*` | arquivo real, **sem fallback** — asset ausente é 404, não HTML, senão um build quebrado se esconde atrás de erro de MIME |
+| qualquer outro | arquivo real quando existir, `index.html` quando não |
+
+Rota de frontend desconhecida também recebe `index.html`: o host não sabe quais
+caminhos o React conhece, e quem mostra "Página não encontrada" é a rota
+`path="*"` da aplicação. O fallback **não** afrouxa autenticação — as guardas de
+ADMIN continuam exigindo login depois de o React carregar.
+
+**O que verificar no painel, porque isso não é versionável.** A configuração do
+serviço de frontend vive no Railway e não no repositório, então não há como
+confirmar daqui qual mecanismo está ativo. Confira, no serviço do **frontend**:
+
+1. O builder usa o `Caddyfile` da raiz. Se o serviço estiver publicando com um
+   comando de start próprio, ele ignora este arquivo.
+2. Se o serviço servir o estático pelo provider do Railpack, `RAILPACK_SPA_OUTPUT_DIR`
+   deve apontar para `dist` — é o mecanismo oficial e dispensa o `Caddyfile`.
+3. `vite preview` como start **já** entrega o fallback (verificado localmente),
+   mas devolve `index.html` para asset inexistente, o que transforma build
+   quebrado em erro de MIME confuso. O `Caddyfile` não tem esse defeito.
+
+Depois de publicar, o teste de aceitação é abrir direto, sem passar pela raiz:
+`/agendamento/<token>`, `/login` e `/admin/agenda`, e dar F5 em cada uma.
+
+`tests/spa-fallback.test.ts` exercita esse contrato contra o `dist` real e confere
+que o `Caddyfile` continua declarando-o. Ele **não** executa o Railway nem o
+Caddy: a validação de que a plataforma aplica o arquivo só existe no deploy.
 
 ## Primeiro administrador após a migration
 

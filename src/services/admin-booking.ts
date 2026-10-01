@@ -191,6 +191,68 @@ export async function deleteBlock(id: string): Promise<void> {
   await apiRequest(`/admin/blocks/${id}`, { method: "DELETE" })
 }
 
+/**
+ * Bloqueia o dia inteiro de uma vez.
+ *
+ * Um bloqueio só cobrindo o dia, em vez de um por horário da grade: liberar
+ * depois é um clique, não quinze.
+ */
+export async function blockWholeDay(input: {
+  date: string
+  reason: string
+}): Promise<ScheduleBlock> {
+  const data = await apiRequest<{ block: ScheduleBlock }>("/admin/blocks/whole-day", {
+    method: "POST",
+    body: input,
+  })
+  return data.block
+}
+
+/** Por que um horário não pode ser escolhido. Só a visão administrativa recebe. */
+export type SlotUnavailableReason = "APPOINTMENT" | "BLOCK" | "OUTSIDE_HOURS" | "PAST"
+
+/**
+ * Um início da grade, visto pela barbearia.
+ *
+ * A diferença em relação à grade pública é o MOTIVO — e ele muda a ação
+ * possível: `BLOCK` se desfaz por aqui, `APPOINTMENT` não. Por isso `blockId` só
+ * vem quando o motivo é bloqueio: sem ele, a tela não tem o que liberar, e não
+ * pode oferecer um botão que apagaria a reserva de alguém.
+ */
+export interface AdminGridSlot {
+  startsAtClock: string
+  endsAtClock: string
+  startsAt: string
+  available: boolean
+  reason: SlotUnavailableReason | null
+  blockId: string | null
+  blockReason: string | null
+  /** Leva ao detalhe do agendamento. Nunca vem com `blockId`. */
+  appointmentId: string | null
+}
+
+export interface AdminAvailability {
+  date: string
+  serviceId: string
+  serviceName: string
+  durationMinutes: number
+  /** Minutos que a agenda reserva; pode exceder a duração. */
+  reservedMinutes: number
+  slotIntervalMinutes: number
+  /** `false` é dia sem expediente — a grade vem vazia. */
+  open: boolean
+  windows: Array<{ opensAt: string; closesAt: string }>
+  grid: AdminGridSlot[]
+}
+
+export async function getAdminAvailability(
+  date: string,
+  serviceId: string,
+): Promise<AdminAvailability> {
+  const query = new URLSearchParams({ date, serviceId })
+  return apiRequest<AdminAvailability>(`/admin/availability?${query.toString()}`)
+}
+
 export async function listAdminBusinessHours(): Promise<BusinessHoursDay[]> {
   const data = await apiRequest<{ days: BusinessHoursDay[] }>("/admin/business-hours")
   return data.days
@@ -223,10 +285,23 @@ export async function getCustomerDossier(
 export async function decideBookingRequest(
   id: string,
   decision: "CONFIRMED" | "REJECTED",
+  /**
+   * "Sim, recusar mesmo com Pix declarado."
+   *
+   * O servidor barra com 409 uma recusa sobre pedido com pagamento declarado ou
+   * já confirmado, até vir este reconhecimento — e recusar NÃO devolve dinheiro.
+   */
+  acknowledgePaidReport?: boolean,
 ): Promise<AdminAppointment> {
   const data = await apiRequest<{ appointment: AdminAppointment }>(
     `/admin/requests/${id}/decide`,
-    { method: "POST", body: { decision } },
+    {
+      method: "POST",
+      body: {
+        decision,
+        ...(acknowledgePaidReport ? { acknowledgePaidReport: true } : {}),
+      },
+    },
   )
   return data.appointment
 }

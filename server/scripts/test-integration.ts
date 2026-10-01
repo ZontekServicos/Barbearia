@@ -19,6 +19,11 @@ for (const args of [
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/payment.integration.test.ts"],
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/public-migration.integration.test.ts"],
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/service-buffers.integration.test.ts"],
+  [
+    "node_modules/tsx/dist/cli.mjs",
+    "--test",
+    "src/config/availability-admin.integration.test.ts",
+  ],
   ["node_modules/tsx/dist/cli.mjs", "--test", "src/config/password-migration.integration.test.ts"],
   [
     "node_modules/tsx/dist/cli.mjs",

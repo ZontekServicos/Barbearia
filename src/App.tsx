@@ -29,6 +29,7 @@ import { AccountBlocked, PendingApproval } from "./pages/client/AccountStatus"
 import Dashboard from "./pages/admin/Dashboard"
 import Agenda from "./pages/admin/Agenda"
 import AppointmentDetail from "./pages/admin/AppointmentDetail"
+import Availability from "./pages/admin/Availability"
 import Clients from "./pages/admin/Clients"
 import ClientProfile from "./pages/admin/ClientProfile"
 import Services from "./pages/admin/Services"
@@ -157,6 +158,14 @@ export default function App() {
             element={
               <AdminPage>
                 <AppointmentDetail />
+              </AdminPage>
+            }
+          />
+          <Route
+            path="/admin/availability"
+            element={
+              <AdminPage>
+                <Availability />
               </AdminPage>
             }
           />

@@ -970,16 +970,24 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
   it("bloqueios que encostam no expediente e em reserva respeitam [start,end)", async () => {
     const service = await makeService({ durationMinutes: 30 })
     const customer = await login()
+    const admin = await login("ADMIN")
     const date = nextTuesday()
     const before = await availability.getAvailability(date, service.id)
     await schedule.createBlock({ date, startsAt: "08:00", endsAt: "09:00", reason: "Antes da abertura" })
     await schedule.createBlock({ date, startsAt: "19:00", endsAt: "20:00", reason: "Depois de fechar" })
     assert.deepEqual((await availability.getAvailability(date, service.id)).slots, before.slots)
-    await appointments.createAppointment({ userId: customer.user.id, serviceId: service.id, date, startsAt: "09:00" })
-    await schedule.createBlock({ date, startsAt: "09:30", endsAt: "10:00", reason: "Depois do corte" })
+    const { appointment: created } = await appointments.createAppointment({
+      userId: customer.user.id, serviceId: service.id, date, startsAt: "09:00",
+    })
+    await assert.rejects(
+      schedule.createBlock({ date, startsAt: "09:30", endsAt: "10:00", reason: "Sobrepõe o corte" }),
+      /agendamento ativo/i,
+    )
+    await schedule.createBlock({ date, startsAt: "09:40", endsAt: "10:00", reason: "Depois do corte" })
     const result = await availability.getAvailability(date, service.id)
     assert.equal(result.slots.some(slot => slot.startsAtClock === "09:30"), false)
     assert.ok(result.slots.some(slot => slot.startsAtClock === "10:00"))
+    await appointments.updateAppointmentStatus(admin.user.id, created.id, "CANCELLED")
     await schedule.createBlock({ date, startsAt: "00:00", endsAt: "23:59", reason: "Folga integral" })
     const closed = await availability.getAvailability(date, service.id)
     assert.deepEqual(closed.slots, [])

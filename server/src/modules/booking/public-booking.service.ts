@@ -106,7 +106,8 @@ export interface PublicRequestView {
    * por webhook, e oferecer este botão ali convidaria a pessoa a cobrar atenção
    * humana para algo que já está automatizado.
    *
-   * É comunicação e nada mais: abrir não muda estado nenhum.
+   * O link é só a comunicação. A rota de declaração registra separadamente
+   * `paymentReportedAt`, sem marcar o pagamento como pago nem confirmar o horário.
    */
   pixPaidUrl: string | null
 }
@@ -359,8 +360,9 @@ export async function getPublicRequest(
     (appointment.status === "PENDING" || appointment.status === "AWAITING_PAYMENT") &&
     ((appointment.pendingExpiresAt !== null &&
       appointment.pendingExpiresAt.getTime() <= now.getTime()) ||
-      (appointment.status === "AWAITING_PAYMENT" &&
-        appointment.payment !== null &&
+      // Vale nos dois estados que esperam dinheiro: com o Pix nascendo junto com
+      // a solicitação, a cobrança e a conferência também correm em PENDING.
+      (appointment.payment !== null &&
         (appointment.payment.reviewExpiresAt ?? appointment.payment.expiresAt).getTime() <= now.getTime()))
 
   const view = toPublicAppointment(lapsed ? { ...appointment, status: "EXPIRED" } : appointment)
@@ -392,8 +394,22 @@ export async function getPublicRequest(
    *
    * Prazo vencido (`lapsed`) fecha os dois casos.
    */
+  /**
+   * `PENDING` entra junto com `AWAITING_PAYMENT`.
+   *
+   * No Pix estático a cobrança nasce COM a solicitação, então o QR tem de
+   * aparecer antes de qualquer decisão da barbearia — é o ponto do fluxo: quem
+   * acabou de pedir horário paga ali, com o celular na mão, em vez de voltar
+   * depois (e muitos não voltam).
+   *
+   * O agendamento segue PENDING: ver o QR não aprova nada, e a confirmação
+   * continua sendo ato da barbearia depois de conferir o extrato.
+   *
+   * `AWAITING_PAYMENT` continua aceito pelas reservas criadas antes desta
+   * mudança, que ficaram nesse estado.
+   */
   const awaitingPayment =
-    view.status === "AWAITING_PAYMENT" &&
+    (view.status === "AWAITING_PAYMENT" || view.status === "PENDING") &&
     (appointment.payment?.status === "PENDING" || appointment.payment?.status === "FAILED") &&
     !lapsed
 

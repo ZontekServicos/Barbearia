@@ -106,8 +106,27 @@ async function book(serviceId: string, startsAt = "09:00") {
     contactHandle: registered.body.data.contactHandle as string,
   }
 }
-const approve = (access: string, id: string) =>
-  call(`/admin/requests/${id}/decide`, { access, body: { decision: "CONFIRMED" } })
+/**
+ * Chega ao estado em que o Pix pode ser pago.
+ *
+ * Desde que a cobrança nasce COM a solicitação, não existe passo de aprovação
+ * para chegar aqui: criar o pedido já abre o Pix, e o agendamento fica em
+ * PENDING até a barbearia conferir o extrato. Este atalho só LÊ o que o painel
+ * mostra nesse instante, para os testes continuarem inspecionando o agendamento
+ * logo depois do setup.
+ *
+ * Antes esta função aprovava o pedido, porque era a aprovação que abria a
+ * cobrança. O nome mudou junto com o fluxo de propósito: `approve` aqui passaria
+ * a mentir sobre o que o setup faz.
+ */
+const payable = (access: string, id: string) => call(`/admin/appointments/${id}`, { access })
+
+/** A decisão administrativa de verdade, para quem testa a própria rota. */
+const decideRequest = (
+  access: string,
+  id: string,
+  body: { decision: "CONFIRMED" | "REJECTED"; acknowledgePaidReport?: boolean },
+) => call(`/admin/requests/${id}/decide`, { access, body })
 
 async function cleanup() {
   await prisma.paymentWebhookEvent.deleteMany()
@@ -191,9 +210,9 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
 
-    const decided = await approve(access, appointmentId)
+    const decided = await payable(access, appointmentId)
     assert.equal(decided.status, 200)
-    assert.equal(decided.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(decided.body.data.appointment.status, "PENDING")
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     assert.equal(payment.provider, "static-pix")
@@ -253,7 +272,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
 
     // E o caminho limpo cobra o preço do catálogo.
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     assert.equal(payment.amountCents, 4000)
     const view = await call(`/booking/requests/${publicToken}`)
@@ -264,7 +283,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService(12_050)
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const view = await call(`/booking/requests/${publicToken}`)
     assert.equal(view.body.data.payment.amountFormatted, "120,50")
     assert.ok(view.body.data.pix.copyPaste.includes("5406120.50"))
@@ -279,18 +298,18 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     // Consultar repetidamente é o que a tela faz enquanto a pessoa paga.
     for (let attempt = 0; attempt < 6; attempt++) {
       const view = await call(`/booking/requests/${publicToken}`)
-      assert.equal(view.body.data.appointment.status, "AWAITING_PAYMENT")
+      assert.equal(view.body.data.appointment.status, "PENDING")
       assert.equal(view.body.data.payment.status, "PENDING")
       assert.equal(view.body.data.whatsappUrl, null, "nunca oferece confirmação antes de pagar")
     }
 
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
-    assert.equal(appointment.status, "AWAITING_PAYMENT")
+    assert.equal(appointment.status, "PENDING")
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
       "PENDING",
@@ -301,7 +320,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     for (const [path, body] of [
       [`/booking/requests/${publicToken}/pay`, { status: "PAID" }],
@@ -316,7 +335,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
 
     assert.equal(
       (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
-      "AWAITING_PAYMENT",
+      "PENDING",
     )
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
@@ -328,7 +347,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const response = await call("/booking/payments/webhook", {
       body: { eventId: "x", status: "PAID", amountCents: 4000, currency: "BRL", reference: "EC-AAAAAA" },
@@ -337,7 +356,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.equal(await prisma.paymentWebhookEvent.count(), 0)
     assert.equal(
       (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
-      "AWAITING_PAYMENT",
+      "PENDING",
     )
   })
 
@@ -349,7 +368,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access, id: adminId } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const settled = await call(`/admin/appointments/${appointmentId}/payment`, {
       access,
@@ -391,7 +410,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const failed = await call(`/admin/appointments/${appointmentId}/payment`, {
       access,
@@ -405,7 +424,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     // A reserva continua na janela: dá para tentar de novo dentro do prazo.
     assert.equal(
       (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
-      "AWAITING_PAYMENT",
+      "PENDING",
     )
     const view = await call(`/booking/requests/${publicToken}`)
     assert.equal(view.body.data.whatsappUrl, null, "recusado não oferece confirmação")
@@ -415,7 +434,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     // Sem sessão.
     assert.equal(
@@ -451,7 +470,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     }
     assert.equal(
       (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
-      "AWAITING_PAYMENT",
+      "PENDING",
     )
   })
 
@@ -459,7 +478,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const past = new Date(Date.now() - 60_000)
     await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: past } })
@@ -493,7 +512,9 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(free.id)
 
-    const decided = await approve(access, appointmentId)
+    // Sem valor a cobrar não nasce cobrança, então aqui a aprovação de verdade
+    // ainda é o caminho — e ela confirma direto, como numa instalação sem Pix.
+    const decided = await decideRequest(access, appointmentId, { decision: "CONFIRMED" })
     assert.equal(decided.status, 200)
     assert.equal(decided.body.data.appointment.status, "CONFIRMED")
     assert.equal(await prisma.payment.count(), 0)
@@ -507,7 +528,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const view = await call(`/booking/requests/${publicToken}`)
     const url: string = view.body.data.paymentHelpUrl
@@ -536,7 +557,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
 
@@ -573,7 +594,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
     const before = Date.now()
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     const minutes = (payment.expiresAt.getTime() - before) / 60_000
     assert.ok(minutes > 119 && minutes < 121, `janela de ${minutes} minutos`)
@@ -584,18 +605,20 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
 
-    // Antes de aprovar não há cobrança nenhuma.
+    // A cobrança já existe sem nenhuma decisão: é o ponto do fluxo. Antes só
+    // nascia na aprovação, e quem acabara de pedir horário não tinha o que pagar.
     const pending = await call(`/admin/appointments/${appointmentId}`, { access })
     assert.equal(pending.status, 200)
-    assert.equal(pending.body.data.appointment.payment, null, "sem aprovação, sem cobrança")
+    assert.ok(pending.body.data.appointment.payment, "o Pix nasce com a solicitação")
+    assert.equal(pending.body.data.appointment.payment.status, "PENDING")
+    assert.equal(pending.body.data.appointment.status, "PENDING", "ver o Pix não aprova nada")
     // A referência já existe: é ela que liga o aviso recebido no WhatsApp ao
-    // pedido na agenda, antes mesmo de aprovar.
+    // pedido na agenda.
     assert.match(pending.body.data.appointment.reference, /^EC-/)
 
-    await approve(access, appointmentId)
     const detail = await call(`/admin/appointments/${appointmentId}`, { access })
     const payment = detail.body.data.appointment.payment
-    assert.equal(detail.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(detail.body.data.appointment.status, "PENDING")
     assert.equal(payment.method, "PIX_MANUAL")
     assert.equal(payment.status, "PENDING")
     assert.equal(payment.amountFormatted, "40,00")
@@ -619,13 +642,13 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const agenda = await call(`/admin/agenda?from=${nextTuesday()}`, { access })
     assert.equal(agenda.status, 200)
     const item = agenda.body.data.appointments.find((entry: any) => entry.id === appointmentId)
     assert.ok(item, "o agendamento aparece na agenda")
-    assert.equal(item.status, "AWAITING_PAYMENT")
+    assert.equal(item.status, "PENDING")
     assert.equal(item.payment.method, "PIX_MANUAL")
     assert.equal(item.payment.canConfirmManually, true)
     assert.match(item.reference, /^EC-/)
@@ -635,18 +658,12 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
 
-    // PENDING: nem cobrança existe.
+    // Esperando o dinheiro (PENDING): pode confirmar desde a criação, porque a
+    // cobrança nasce junto com a solicitação.
     const waiting = await book(service.id, "09:00")
     const pendingDetail = await call(`/admin/appointments/${waiting.appointmentId}`, { access })
-    assert.equal(pendingDetail.body.data.appointment.payment, null)
-
-    // AWAITING_PAYMENT: pode.
-    await approve(access, waiting.appointmentId)
-    assert.equal(
-      (await call(`/admin/appointments/${waiting.appointmentId}`, { access })).body.data.appointment
-        .payment.canConfirmManually,
-      true,
-    )
+    assert.equal(pendingDetail.body.data.appointment.status, "PENDING")
+    assert.equal(pendingDetail.body.data.appointment.payment.canConfirmManually, true)
 
     // CONFIRMED: já não há o que confirmar.
     await call(`/admin/appointments/${waiting.appointmentId}/payment`, {
@@ -661,7 +678,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
 
     // Prazo vencido: o painel não pode mais oferecer o botão.
     const lapsing = await book(service.id, "10:20")
-    await approve(access, lapsing.appointmentId)
+    await payable(access, lapsing.appointmentId)
     const past = new Date(Date.now() - 60_000)
     await prisma.payment.updateMany({
       where: { appointmentId: lapsing.appointmentId },
@@ -682,7 +699,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const first = await makeAdmin()
     const second = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(first.access, appointmentId)
+    await payable(first.access, appointmentId)
 
     const results = await Promise.all([
       call(`/admin/appointments/${appointmentId}/payment`, {
@@ -715,7 +732,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     assert.equal(
       (await call(`/admin/appointments/${appointmentId}/payment`, {
@@ -738,7 +755,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access, id: adminId } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const before = Date.now()
     await call(`/admin/appointments/${appointmentId}/payment`, {
       access,
@@ -763,7 +780,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const failed = await call(`/admin/appointments/${appointmentId}/payment`, {
       access,
@@ -772,7 +789,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.equal(failed.status, 200)
     // O agendamento NÃO é cancelado: continua na janela.
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
-    assert.equal(appointment.status, "AWAITING_PAYMENT")
+    assert.equal(appointment.status, "PENDING")
     assert.notEqual(appointment.pendingExpiresAt, null, "o prazo continua valendo")
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).status,
@@ -796,11 +813,11 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     // Antes: aguardando pagamento, com QR.
     const paying = await call(`/booking/requests/${publicToken}`)
-    assert.equal(paying.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(paying.body.data.appointment.status, "PENDING")
     assert.ok(paying.body.data.pix, "QR disponível enquanto falta pagar")
     assert.equal(paying.body.data.whatsappUrl, null)
 
@@ -830,11 +847,10 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
 
-    // PENDING: não há Pix na tela, logo não há o que confirmar.
-    assert.equal((await call(`/booking/requests/${publicToken}`)).body.data.pixPaidUrl, null)
-
-    await approve(access, appointmentId)
+    // PENDING já traz o Pix na tela — e, com ele, o CTA. É o ponto do fluxo:
+    // quem acabou de pedir horário paga agora, não depois de uma aprovação.
     const paying = await call(`/booking/requests/${publicToken}`)
+    assert.equal(paying.body.data.appointment.status, "PENDING")
     assert.equal(paying.body.data.pix.source, "STATIC_PIX")
     const url: string = paying.body.data.pixPaidUrl
     assert.ok(url, "aguardando Pix manual oferece o CTA")
@@ -856,7 +872,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService(12_050)
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const view = await call(`/booking/requests/${publicToken}`)
     const message = decodeURIComponent(view.body.data.pixPaidUrl.split("?text=")[1])
@@ -882,7 +898,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
     const paymentBefore = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
@@ -891,7 +907,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     // É o que a tela faz enquanto a pessoa paga e volta do WhatsApp.
     for (let attempt = 0; attempt < 5; attempt++) {
       const view = await call(`/booking/requests/${publicToken}`)
-      assert.equal(view.body.data.appointment.status, "AWAITING_PAYMENT")
+      assert.equal(view.body.data.appointment.status, "PENDING")
       assert.equal(view.body.data.payment.status, "PENDING")
       assert.ok(view.body.data.pixPaidUrl, "o CTA continua disponível")
       assert.equal(view.body.data.whatsappUrl, null, "nunca oferece confirmação")
@@ -899,7 +915,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
 
     const after = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
     const paymentAfter = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
-    assert.equal(after.status, "AWAITING_PAYMENT")
+    assert.equal(after.status, "PENDING")
     assert.equal(paymentAfter.status, "PENDING")
     assert.equal(paymentAfter.paidAt, null)
     assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime(), "agendamento intocado")
@@ -919,7 +935,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const past = new Date(Date.now() - 60_000)
     await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: past } })
@@ -938,7 +954,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const appointments = ["PENDING", "AWAITING_PAYMENT", "CONFIRMED", "REJECTED", "EXPIRED", "CANCELLED", "COMPLETED", "NO_SHOW"] as const
     const payments = ["PENDING", "PAID", "FAILED", "EXPIRED", "CANCELED"] as const
     for (const status of appointments) {
@@ -956,8 +972,15 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
          * volta. Antes a tela prometia nova tentativa no painel e não oferecia
          * nenhuma do lado do cliente.
          */
-        const payable = paymentStatus === "PENDING" || paymentStatus === "FAILED"
-        assert.equal(Boolean(response.body.data.pixPaidUrl), status === "AWAITING_PAYMENT" && payable, status + "/" + paymentStatus)
+        const chargeOpen = paymentStatus === "PENDING" || paymentStatus === "FAILED"
+        /**
+         * Dois estados do agendamento oferecem o CTA: `PENDING`, que é o normal
+         * desde que o Pix nasce com a solicitação, e `AWAITING_PAYMENT`, das
+         * reservas criadas antes dessa mudança. Nos demais não há pagamento em
+         * aberto para declarar.
+         */
+        const waitingMoney = status === "AWAITING_PAYMENT" || status === "PENDING"
+        assert.equal(Boolean(response.body.data.pixPaidUrl), waitingMoney && chargeOpen, status + "/" + paymentStatus)
       }
     }
   })
@@ -966,7 +989,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const number = env.env.BARBERSHOP_WHATSAPP_NUMBER
     try {
       delete env.env.BARBERSHOP_WHATSAPP_NUMBER
@@ -984,7 +1007,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const payload = (await call("/booking/requests/" + publicToken)).body.data.pix.copyPaste
     for (const pixQrCode of [payload, "invalid", null]) {
       await prisma.payment.updateMany({ where: { appointmentId }, data: { provider: "manual", providerPaymentId: "provider-private-id", pixQrCode } })
@@ -1003,7 +1026,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
       const service = await makeService()
       const { access, id: adminId } = await makeAdmin()
       const { appointmentId, publicToken } = await book(service.id)
-      await approve(access, appointmentId)
+      await payable(access, appointmentId)
       const now = new Date()
       if (deadline === "payment") await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: now } })
       else await prisma.appointment.update({ where: { id: appointmentId }, data: { pendingExpiresAt: now } })
@@ -1028,7 +1051,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     const before = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
     const paymentBefore = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     const auditBefore = await prisma.adminAuditLog.count()
@@ -1051,7 +1074,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
       const service = await makeService(amountCents)
       const { access } = await makeAdmin()
       const { appointmentId, publicToken, contactHandle } = await book(service.id)
-      await approve(access, appointmentId)
+      await payable(access, appointmentId)
       const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
       const session = await tokens.issueSession(appointment.userId)
       const customer = await prisma.user.findUniqueOrThrow({ where: { id: appointment.userId } })
@@ -1094,15 +1117,144 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
   const report = (token: string) =>
     call(`/booking/requests/${token}/payment-reported`, { body: {} })
 
+  // -------------------------------------------------------------------------
+  // A decisão final da barbearia
+  // -------------------------------------------------------------------------
+
+  it("aprovar sem conferir o Pix é recusado: confirmar passa pelo pagamento", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId } = await book(service.id)
+
+    // Uma porta só quando há dinheiro envolvido. Aprovar "no seco" confirmaria o
+    // horário de quem não pagou.
+    const attempt = await decideRequest(access, appointmentId, { decision: "CONFIRMED" })
+    assert.equal(attempt.status, 409)
+    assert.match(attempt.body.error.message, /Confirmar pagamento e agendamento/)
+
+    const untouched = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    assert.equal(untouched.status, "PENDING", "a recusa não mexeu no agendamento")
+    assert.equal(untouched.payment!.status, "PENDING")
+
+    // A porta certa marca pagamento E agendamento no mesmo ato.
+    const settled = await call(`/admin/appointments/${appointmentId}/payment`, {
+      access,
+      body: { decision: "PAID" },
+    })
+    assert.equal(settled.status, 200)
+    const after = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    assert.equal(after.status, "CONFIRMED")
+    assert.equal(after.payment!.status, "PAID")
+    assert.notEqual(after.payment!.paidAt, null)
+  })
+
+  it("recusar quem declarou pagamento exige confirmação explícita e nunca devolve dinheiro", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId, publicToken } = await book(service.id)
+    assert.equal((await report(publicToken)).status, 200)
+
+    // Primeiro clique barrado: há dinheiro de outra pessoa em jogo, e desfazer
+    // uma recusa depende de transferência manual.
+    const blocked = await decideRequest(access, appointmentId, { decision: "REJECTED" })
+    assert.equal(blocked.status, 409)
+    assert.match(blocked.body.error.message, /informou que já pagou/)
+    assert.equal(
+      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
+      "PENDING",
+      "a guarda não pode decidir pela metade",
+    )
+
+    const done = await decideRequest(access, appointmentId, {
+      decision: "REJECTED",
+      acknowledgePaidReport: true,
+    })
+    assert.equal(done.status, 200)
+    const after = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    assert.equal(after.status, "REJECTED")
+    // A cobrança morre para ninguém pagar horário recusado. E NÃO há devolução
+    // automática: nada aqui afirma que o dinheiro voltou.
+    assert.equal(after.payment!.status, "CANCELED")
+    assert.equal(after.payment!.paidAt, null)
+
+    // O registro guarda o que havia, para sustentar a devolução feita por fora.
+    const log = await prisma.adminAuditLog.findFirstOrThrow({
+      where: { action: "APPOINTMENT_REQUEST_REJECTED" },
+      orderBy: { createdAt: "desc" },
+    })
+    const metadata = log.metadata as Record<string, { refunded: boolean; amountCents: number; paymentReportedAt?: string }>
+    assert.equal(metadata.rejectedWithPayment.refunded, false)
+    assert.equal(metadata.rejectedWithPayment.amountCents, 4000)
+    assert.ok(metadata.rejectedWithPayment.paymentReportedAt, "guarda quando foi declarado")
+  })
+
+  it("recusar pagamento já confirmado preserva o PAID: devolução é por fora", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId } = await book(service.id)
+    await call(`/admin/appointments/${appointmentId}/payment`, {
+      access,
+      body: { decision: "PAID" },
+    })
+    // Volta a PENDING apenas para alcançar a rota de decisão com cobrança PAID —
+    // é o caso de alguém pagar e a barbearia ainda assim não poder atender.
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { status: "PENDING", pendingExpiresAt: new Date(Date.now() + 60 * 60_000) },
+    })
+
+    const blocked = await decideRequest(access, appointmentId, { decision: "REJECTED" })
+    assert.equal(blocked.status, 409, "pagamento confirmado também exige reconhecimento")
+
+    const done = await decideRequest(access, appointmentId, {
+      decision: "REJECTED",
+      acknowledgePaidReport: true,
+    })
+    assert.equal(done.status, 200)
+    const after = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    assert.equal(after.status, "REJECTED")
+    // PAID permanece: o dinheiro entrou, e apagar isso esconderia que existe
+    // devolução pendente.
+    assert.equal(after.payment!.status, "PAID")
+    assert.notEqual(after.payment!.paidAt, null)
+  })
+
+  it("recusar pedido sem pagamento declarado não pede confirmação extra", async () => {
+    const service = await makeService()
+    const { access } = await makeAdmin()
+    const { appointmentId } = await book(service.id)
+
+    const done = await decideRequest(access, appointmentId, { decision: "REJECTED" })
+    assert.equal(done.status, 200)
+    const after = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      include: { payment: true },
+    })
+    assert.equal(after.status, "REJECTED")
+    assert.equal(after.payment!.status, "CANCELED", "QR vivo em reserva morta convida a pagar")
+  })
+
   it("audit: review remains readable and confirmable past payment expiry", async () => {
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     assert.equal((await report(publicToken)).status, 200)
     await prisma.payment.update({ where: { appointmentId }, data: { expiresAt: new Date(Date.now() - 1000) } })
     const view = await call("/booking/requests/" + publicToken)
-    assert.equal(view.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(view.body.data.appointment.status, "PENDING")
     assert.equal(view.body.data.paymentReported, true)
     assert.equal(view.body.data.pix, null)
     assert.equal((await call("/admin/appointments/" + appointmentId + "/payment", { access, body: { decision: "PAID" } })).status, 200)
@@ -1112,7 +1264,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     for (const status of ["FAILED", "EXPIRED", "CANCELED"] as const) {
       await prisma.payment.update({ where: { appointmentId }, data: { status } })
       assert.equal((await report(publicToken)).status, 409, status)
@@ -1127,7 +1279,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     assert.equal((await call("/booking/requests/" + publicToken + "/payment-reported", { method: "POST" })).status, 200)
   })
 
@@ -1136,7 +1288,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const before = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
     const apptBefore = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
@@ -1153,7 +1305,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     // NÃO confirma: essas duas linhas são a razão de existir do teste.
     assert.equal(after.status, "PENDING")
     assert.equal(after.paidAt, null)
-    assert.equal(apptAfter.status, "AWAITING_PAYMENT")
+    assert.equal(apptAfter.status, "PENDING")
     // O prazo original é preservado, e a reserva passa a valer pelo da conferência.
     assert.equal(after.expiresAt.getTime(), before.expiresAt.getTime())
     assert.equal(apptAfter.pendingExpiresAt!.getTime(), after.reviewExpiresAt!.getTime())
@@ -1168,7 +1320,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const first = await report(publicToken)
     assert.equal(first.status, 200)
@@ -1185,7 +1337,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     await report(publicToken)
 
     // O prazo de PAGAMENTO vence — mas o de conferência não.
@@ -1228,7 +1380,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     // Dentro da folga de uma hora não cabe conferência nenhuma.
     await prisma.appointment.update({
       where: { id: appointmentId },
@@ -1250,7 +1402,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const paying = await call(`/booking/requests/${publicToken}`)
     assert.ok(paying.body.data.pix, "antes: QR presente")
@@ -1263,7 +1415,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.equal(reported.body.data.pix, null)
     assert.equal(reported.body.data.pixPaidUrl, null)
     // E continua sem prometer confirmação.
-    assert.equal(reported.body.data.appointment.status, "AWAITING_PAYMENT")
+    assert.equal(reported.body.data.appointment.status, "PENDING")
     assert.equal(reported.body.data.payment.status, "PENDING")
     assert.equal(reported.body.data.whatsappUrl, null)
     // O prazo mostrado passa a ser o da conferência.
@@ -1275,7 +1427,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     let detail = await call(`/admin/appointments/${appointmentId}`, { access })
     assert.equal(detail.body.data.appointment.payment.reportedAt, null)
@@ -1298,7 +1450,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     await report(publicToken)
 
     // A declaração foi 25h atrás, então o prazo de 24h venceu há uma hora. Esta
@@ -1342,7 +1494,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
     await report(publicToken)
     const original = (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).expiresAt
 
@@ -1359,7 +1511,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     // "pagamento informado", escondendo o QR e impedindo nova tentativa.
     assert.equal(payment.paymentReportedAt, null)
     assert.equal(payment.reviewExpiresAt, null)
-    assert.equal(appointment.status, "AWAITING_PAYMENT", "a reserva não é destruída")
+    assert.equal(appointment.status, "PENDING", "a reserva não é destruída")
     assert.equal(appointment.pendingExpiresAt!.getTime(), original.getTime())
     // A declaração desfeita sobrevive na auditoria.
     const audit = await prisma.adminAuditLog.findFirstOrThrow({
@@ -1394,7 +1546,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     for (const key of [
       "paidAt", "status", "paymentStatus", "amount", "amountCents", "appointmentStatus",
@@ -1414,7 +1566,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     limits.publicBookingRateLimit.resetKey("127.0.0.1")
     limits.publicContactRateLimit.resetKey("127.0.0.1")
     const other = await book(service.id, "10:20")
-    await approve(access, other.appointmentId)
+    await payable(access, other.appointmentId)
     await report(other.publicToken)
     assert.equal(
       (await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })).paymentReportedAt,
@@ -1435,7 +1587,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const { access } = await makeAdmin()
     const { appointmentId, publicToken } = await book(service.id)
-    await approve(access, appointmentId)
+    await payable(access, appointmentId)
 
     const past = new Date(Date.now() - 60_000)
     await prisma.payment.updateMany({ where: { appointmentId }, data: { expiresAt: past } })
@@ -1456,7 +1608,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     const service = await makeService()
     const admin = await makeAdmin()
     const booking = await book(service.id)
-    assert.equal((await approve(admin.access, booking.appointmentId)).status, 200)
+    assert.equal((await payable(admin.access, booking.appointmentId)).status, 200)
     return { service, admin, ...booking }
   }
 
@@ -1512,7 +1664,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
       const p = await prisma.payment.findUniqueOrThrow({ where: { appointmentId } })
       const a = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
       assert.equal(p.status, decision === "PAID" ? "PAID" : "PENDING")
-      assert.equal(a.status, decision === "PAID" ? "CONFIRMED" : "AWAITING_PAYMENT")
+      assert.equal(a.status, decision === "PAID" ? "CONFIRMED" : "PENDING")
       if (decision === "FAILED") assert.equal(p.paidAt, null)
     })
   }
@@ -1606,7 +1758,7 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.ok(+reported.reviewExpiresAt > +future)
     await assert.rejects(rival, { statusCode: 409 })
     const a = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })
-    assert.equal(a.status, "AWAITING_PAYMENT")
+    assert.equal(a.status, "PENDING")
     assert.equal(+a.pendingExpiresAt!, +reported.reviewExpiresAt)
   })
 
@@ -1632,8 +1784,23 @@ describe("Pagamento por Pix estático — PostgreSQL real", { skip: !enabled }, 
     assert.equal(p.paymentReportedAt, null)
     assert.equal(p.reviewExpiresAt, null)
     await prisma.payment.update({ where: { appointmentId }, data: { provider: "static-pix" } })
-    await prisma.appointment.update({ where: { id: appointmentId }, data: { status: "PENDING" } })
-    assert.equal((await report(publicToken)).status, 409)
+
+    /**
+     * `PENDING` agora é justamente o estado que ACEITA declaração: o Pix nasce
+     * com a solicitação e a pessoa paga antes de qualquer decisão. O que
+     * continua recusado é declarar sobre um pedido já decidido — aí não há
+     * pagamento em aberto, e aceitar criaria a ilusão de que alguém vai conferir.
+     */
+    assert.equal((await report(publicToken)).status, 200, "PENDING aceita declaração")
+
+    for (const status of ["REJECTED", "CANCELLED", "CONFIRMED"] as const) {
+      await prisma.payment.update({
+        where: { appointmentId },
+        data: { paymentReportedAt: null, reviewExpiresAt: null },
+      })
+      await prisma.appointment.update({ where: { id: appointmentId }, data: { status } })
+      assert.equal((await report(publicToken)).status, 409, status + " não aceita declaração")
+    }
   })
 
   it("audit: repeated rejection cannot extend a short review hold", async () => {

@@ -18,6 +18,7 @@ import {
   listServices,
   type Appointment,
   type AvailableSlot,
+  type GridSlot,
   type BusinessHoursDay,
   type Service,
 } from '@/services/booking'
@@ -31,9 +32,12 @@ import {
   registerContact,
   type ContactRegistration,
   getBookingPolicy,
+  getBookingRequest,
   type BookingPolicy,
   type BookingRequestResult,
+  type BookingRequestView,
 } from '@/services/public-booking'
+import PixPayment from '@/components/booking/PixPayment'
 import {
   clearBookingIntent,
   readBookingIntent,
@@ -350,8 +354,8 @@ function DateStep({ onSelect, onBack }: { onSelect: (d: Date) => void; onBack: (
  * isso vira uma parede de números. Os cortes seguem o uso comum no Brasil e
  * períodos vazios simplesmente não aparecem.
  */
-function groupByPeriod(slots: AvailableSlot[]) {
-  const periods: Array<{ label: string; until: number; entries: AvailableSlot[] }> = [
+function groupByPeriod(slots: GridSlot[]) {
+  const periods: Array<{ label: string; until: number; entries: GridSlot[] }> = [
     { label: 'Manhã', until: 12 * 60, entries: [] },
     { label: 'Tarde', until: 18 * 60, entries: [] },
     { label: 'Noite', until: 24 * 60, entries: [] },
@@ -388,6 +392,8 @@ function TimeStep({
 }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [slots, setSlots] = useState<AvailableSlot[] | null>(null)
+  /** Grade do dia inteira: é ela que a tela desenha, inclusive o que está cinza. */
+  const [grid, setGrid] = useState<GridSlot[] | null>(null)
   const [reason, setReason] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const dateISO = format(date, 'yyyy-MM-dd')
@@ -395,9 +401,21 @@ function TimeStep({
   const load = useCallback(async () => {
     setError(null)
     setSlots(null)
+    setGrid(null)
     try {
       const availability = await getAvailability(dateISO, service.id)
       setSlots(availability.slots)
+      /* Backend publicado fora de ordem não manda `grid`. Em vez de quebrar a
+         tela, volta ao comportamento anterior: desenha só os livres. */
+      setGrid(
+        availability.grid ??
+          availability.slots.map(slot => ({
+            startsAtClock: slot.startsAtClock,
+            endsAtClock: slot.endsAtClock,
+            startsAt: slot.startsAt,
+            available: true,
+          }))
+      )
       setReason(availability.reason)
     } catch (err) {
       setError(describeError(err, 'Não foi possível carregar os horários.'))
@@ -422,9 +440,11 @@ function TimeStep({
 
       {error ? (
         <ErrorState message={error} onRetry={() => void load()} />
-      ) : slots === null ? (
+      ) : grid === null || slots === null ? (
         <LoadingState label="Buscando horários livres…" />
-      ) : slots.length === 0 ? (
+      ) : grid.length === 0 ? (
+        /* Grade vazia é dia sem expediente (fechado, passado, longe demais) —
+           aí não há o que acinzentar e o motivo do dia é a única resposta útil. */
         <div className="border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] rounded-2xl p-8 text-center">
           <Clock className="h-10 w-10 text-[var(--muted-foreground)]/40 mx-auto mb-3" />
           <p className="text-sm text-[var(--muted-foreground)] mb-4">
@@ -436,8 +456,19 @@ function TimeStep({
         </div>
       ) : (
         <>
+          {slots.length === 0 ? (
+            /* Dia aberto e sem vaga: a grade continua à mostra, toda cinza, e o
+               recado é sobre o DIA — nunca sobre um horário específico. */
+            <div
+              role="status"
+              className="mb-5 rounded-xl border border-dashed border-[var(--primary)]/25 bg-[var(--surface-bronze)] px-4 py-3 text-center text-sm text-[var(--muted-foreground)]"
+            >
+              {(reason && EMPTY_REASON[reason]) ?? 'Nenhum horário disponível nesta data.'}
+            </div>
+          ) : null}
+
           <div className="space-y-5 mb-6">
-            {groupByPeriod(slots).map(({ label, entries }) => (
+            {groupByPeriod(grid).map(({ label, entries }) => (
               <div key={label}>
                 <h3 className="text-xs font-semibold tracking-widest text-[var(--muted-foreground)] uppercase mb-2.5">
                   {label}
@@ -448,13 +479,25 @@ function TimeStep({
                     return (
                       <button
                         key={slot.startsAtClock}
-                        aria-pressed={isSelected}
+                        type="button"
+                        /* `disabled` de verdade, não só aparência: o clique não
+                           pode escolher um horário que a reserva vai recusar. */
+                        disabled={!slot.available}
+                        aria-pressed={slot.available ? isSelected : undefined}
+                        /* Rótulo visível continua só a hora. Para quem usa
+                           leitor de tela, o estado precisa ser dito — e
+                           "indisponível" é estado, não o motivo. */
+                        aria-label={
+                          slot.available ? undefined : `${slot.startsAtClock} indisponível`
+                        }
                         onClick={() => setSelected(slot.startsAtClock)}
                         className={cn(
                           'min-h-12 py-3.5 rounded-xl text-sm font-semibold tabular-nums border-2 transition-all',
-                          isSelected
-                            ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
-                            : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]'
+                          !slot.available
+                            ? 'border-[var(--primary)]/10 bg-[var(--muted)]/15 text-[var(--muted-foreground)]/45 cursor-not-allowed'
+                            : isSelected
+                              ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
+                              : 'border-[var(--primary)]/20 bg-[var(--surface-bronze)] shadow-[0_4px_14px_rgba(0,0,0,0.35)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10 text-[var(--foreground)]'
                         )}
                       >
                         {slot.startsAtClock}
@@ -468,7 +511,10 @@ function TimeStep({
 
           <Button
             className="w-full h-12"
-            disabled={!selected}
+            /* Só habilita quando o horário escolhido ainda consta como
+               reservável: se a grade recarregou e ele saiu, continuar levaria a
+               um 409 na cara do cliente. */
+            disabled={!slots.some(entry => entry.startsAtClock === selected)}
             onClick={() => {
               const slot = slots.find(entry => entry.startsAtClock === selected)
               if (slot) onSelect(slot)
@@ -693,15 +739,40 @@ function ContactStep({
  */
 function SuccessStep({
   result,
-  policy,
   onRestart,
 }: {
   result: BookingRequestResult
-  policy: BookingPolicy | null
+  /**
+   * A política global não é mais lida aqui.
+   *
+   * O que decide o texto e o bloco de Pix é a cobrança REAL desta solicitação,
+   * buscada abaixo — um fato concreto em vez de uma configuração que pode não
+   * valer para este pedido (serviço gratuito, por exemplo).
+   */
   onRestart: () => void
 }) {
   const { appointment, awaitingApproval, pendingTtlMinutes } = result
   const [year, month, day] = appointment.date.split('-')
+
+  /**
+   * O Pix desta solicitação, buscado aqui mesmo.
+   *
+   * Vem do MESMO endpoint que a tela de acompanhamento usa, em vez de a criação
+   * devolver o bloco de pagamento junto: assim existe uma fonte só para QR,
+   * chave, valor, recebedor e prazo, e as duas telas não podem divergir.
+   *
+   * Falha de rede não estraga a tela: o pedido já está feito, e o botão de
+   * acompanhar continua levando ao mesmo lugar.
+   */
+  const [view, setView] = useState<BookingRequestView | null>(null)
+  useEffect(() => {
+    if (!awaitingApproval) return
+    let alive = true
+    void getBookingRequest(result.publicToken)
+      .then(next => { if (alive) setView(next) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [awaitingApproval, result.publicToken])
 
   return (
     <div className="text-center py-6">
@@ -737,11 +808,17 @@ function SuccessStep({
               por {Math.round(pendingTtlMinutes / 60)}h enquanto isso — depois
               disso ele volta a ficar disponível para outras pessoas.
             </p>
-            {policy?.paymentRequired && (
+            {/*
+              O pagamento NÃO espera aprovação: o Pix já está logo abaixo.
+              A frase anterior ("assim que a barbearia aprovar, você terá N
+              minutos para pagar") passou a ser falsa com a cobrança nascendo
+              junto com a solicitação — e mandava a pessoa guardar o celular
+              exatamente quando ela podia resolver.
+            */}
+            {view?.pix && view.payment && (
               <p className="text-sm text-[var(--foreground)] mt-2">
-                Assim que a barbearia aprovar, você terá{' '}
-                {policy.paymentWindowMinutes} minutos para pagar e confirmar.
-                Acompanhe por aqui.
+                Você já pode pagar: o Pix está aqui embaixo. A barbearia confirma
+                o horário depois de conferir o recebimento.
               </p>
             )}
             {result.notifyUrl && (
@@ -760,6 +837,17 @@ function SuccessStep({
           </>
         )}
       </div>
+
+      {/*
+        O Pix, na própria tela de sucesso.
+        Quem acabou de pedir horário está com o celular na mão — é agora que
+        paga. Mandar voltar depois é como o pagamento não acontece.
+      */}
+      {view?.pix && view.payment && (
+        <div className="mb-8 text-left">
+          <PixPayment pix={view.pix} amountFormatted={view.payment.amountFormatted} />
+        </div>
+      )}
 
       <div className="space-y-3">
         {/*
@@ -1065,7 +1153,7 @@ export default function Schedule() {
   }
 
   if (step === 'success' && result) {
-    return <SuccessStep result={result} policy={policy} onRestart={restart} />
+    return <SuccessStep result={result} onRestart={restart} />
   }
 
   // A retomada é oferecida antes de qualquer etapa, e só uma vez.

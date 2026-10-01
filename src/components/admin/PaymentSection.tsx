@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, BadgeCheck, Check, Clock, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError } from '@/services/api'
-import { settleAppointmentPayment, type AdminAppointment } from '@/services/admin-booking'
+import {
+  getAdminAppointment,
+  settleAppointmentPayment,
+  type AdminAppointment,
+} from '@/services/admin-booking'
 import { cn } from '@/lib/utils'
 
 /**
@@ -94,7 +98,6 @@ export default function PaymentSection({
         setAsking(null)
         setNotice(err.message)
         try {
-          const { getAdminAppointment } = await import('@/services/admin-booking')
           onSettled(await getAdminAppointment(appointment.id))
         } catch {
           // Sem recarregar, o aviso acima já diz o que aconteceu.
@@ -237,9 +240,13 @@ export default function PaymentSection({
               ? 'O cliente informou que pagou. Confira o recebimento no extrato antes de confirmar.'
               : 'Confira o recebimento no extrato da barbearia antes de confirmar.'}
           </p>
+          {/* O rótulo diz os DOIS efeitos porque a ação faz os dois, numa
+              transação só: marca o pagamento e confirma o agendamento. Dizer
+              apenas "confirmar recebimento" esconderia que o cliente sai
+              daqui com horário garantido. */}
           <Button className="w-full h-11" onClick={() => setAsking('PAID')} disabled={pending}>
             <Check className="h-4 w-4 mr-2" />
-            Confirmar recebimento do Pix
+            Confirmar pagamento e agendamento
           </Button>
           <Button
             variant="outline"

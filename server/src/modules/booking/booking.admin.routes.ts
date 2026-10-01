@@ -2,11 +2,14 @@ import { Router } from "express"
 import type { z } from "zod"
 import { validate } from "../../middlewares/validate.js"
 import { settleStaticPayment } from "../payment/payment.service.js"
+import { getAdminAvailability } from "./availability.service.js"
 import { sendSuccess } from "../../utils/http.js"
 import {
   decideRequestSchema,
   settlePaymentSchema,
   adminAgendaQuerySchema,
+  adminAvailabilityQuerySchema,
+  blockWholeDaySchema,
   createBlockSchema,
   createServiceSchema,
   listBlocksQuerySchema,
@@ -23,6 +26,7 @@ import {
   updateService,
 } from "./catalog.service.js"
 import {
+  blockWholeDay,
   createBlock,
   deleteBlock,
   listBlocks,
@@ -118,7 +122,9 @@ bookingAdminRouter.get("/blocks", validate({ query: listBlocksQuerySchema }), as
 
 bookingAdminRouter.post("/blocks", validate({ body: createBlockSchema }), async (req, res) => {
   const body = req.body as z.infer<typeof createBlockSchema>
-  return sendSuccess(res, { block: await createBlock(body) }, 201)
+  // O autor vem da SESSÃO, nunca do corpo: quem bloqueou é um fato, não um
+  // campo que o cliente da API escolhe.
+  return sendSuccess(res, { block: await createBlock({ ...body, createdById: req.user!.id }) }, 201)
 })
 
 bookingAdminRouter.delete("/blocks/:id", validate({ params: uuidParamSchema }), async (req, res) => {
@@ -185,8 +191,10 @@ bookingAdminRouter.post(
   validate({ params: uuidParamSchema, body: decideRequestSchema }),
   async (req, res) => {
     const { id } = req.params as z.infer<typeof uuidParamSchema>
-    const { decision } = req.body as z.infer<typeof decideRequestSchema>
-    const appointment = await decidePendingRequest(req.user!.id, id, decision)
+    const { decision, acknowledgePaidReport } = req.body as z.infer<typeof decideRequestSchema>
+    const appointment = await decidePendingRequest(req.user!.id, id, decision, undefined, {
+      ...(acknowledgePaidReport === undefined ? {} : { acknowledgePaidReport }),
+    })
     return sendSuccess(res, { appointment })
   },
 )
@@ -211,5 +219,44 @@ bookingAdminRouter.post(
     const { decision } = req.body as z.infer<typeof settlePaymentSchema>
     await settleStaticPayment(req.user!.id, id, decision)
     return sendSuccess(res, { appointment: await getAppointmentForAdmin(id) })
+  },
+)
+
+/**
+ * Grade de disponibilidade do dia, para a gestão da agenda.
+ *
+ * Herda `requireAuth + requireActiveAccount + requireRole("ADMIN")` do router.
+ *
+ * Diferente da grade pública em um ponto só, e é o ponto todo: aqui vem o
+ * MOTIVO de cada horário indisponível. A barbearia precisa distinguir "já tem
+ * cliente" de "eu bloqueei" porque a ação é diferente — só o segundo se desfaz
+ * por aqui.
+ */
+bookingAdminRouter.get(
+  "/availability",
+  validate({ query: adminAvailabilityQuerySchema }),
+  async (req, res) => {
+    const { date, serviceId } = req.validatedQuery as z.infer<typeof adminAvailabilityQuerySchema>
+    return sendSuccess(res, await getAdminAvailability(date, serviceId))
+  },
+)
+
+/**
+ * Bloqueia o dia inteiro.
+ *
+ * Um bloqueio só cobrindo o dia, em vez de um por horário: liberar depois é um
+ * clique. NÃO cancela agendamento existente — desmarcar cliente passa pelo
+ * cancelamento, que avisa quem ia ser atendido.
+ */
+bookingAdminRouter.post(
+  "/blocks/whole-day",
+  validate({ body: blockWholeDaySchema }),
+  async (req, res) => {
+    const body = req.body as z.infer<typeof blockWholeDaySchema>
+    return sendSuccess(
+      res,
+      { block: await blockWholeDay({ ...body, createdById: req.user!.id }) },
+      201,
+    )
   },
 )

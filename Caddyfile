@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# Serviço de FRONTEND — fallback de SPA.
+#
+# Por que este arquivo existe: as rotas do React Router só existem no navegador.
+# O host recebe um GET de verdade em `/agendamento/<token>` e, se não souber que
+# deve entregar `index.html`, responde 404 ANTES de o React iniciar. A pessoa
+# que atualiza a página, abre o link numa aba nova ou volta por ele depois vê a
+# tela de erro do host — e essa é justamente a URL que concentra aprovação, Pix,
+# declaração de pagamento e confirmação.
+#
+# Ficar apenas no painel do Railway deixava isso invisível ao versionamento: não
+# havia como revisar, nem como saber se está ligado. Aqui está, explícito.
+#
+# Caddy é o servidor estático que o builder do Railway (Railpack) usa. Isto NÃO
+# é um servidor Node extra: é a configuração do estático que a plataforma já
+# oferece.
+# ---------------------------------------------------------------------------
+
+# A porta vem da plataforma. O padrão cobre execução local.
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	root * {$FRONTEND_DIST:dist}
+	encode gzip zstd
+
+	# -------------------------------------------------------------------------
+	# A API NUNCA é reescrita.
+	#
+	# Este serviço não serve a API — ela é outro serviço. Se um `/api/...` chegar
+	# aqui, o certo é 404 de verdade: devolver `index.html` faria o cliente
+	# receber HTML onde espera JSON, e o erro apareceria como "Unexpected token
+	# '<'" em vez de "rota não encontrada".
+	# -------------------------------------------------------------------------
+	@api path /api /api/*
+	handle @api {
+		error 404
+	}
+
+	# -------------------------------------------------------------------------
+	# Arquivos versionados: cache longo, porque o nome carrega o hash do
+	# conteúdo. `index.html` fica de fora de propósito (ver abaixo).
+	# -------------------------------------------------------------------------
+	@assets path /assets/*
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		# `file_server` sem fallback: asset que não existe é 404, não HTML.
+		# Devolver `index.html` aqui produziria erro de MIME no navegador e
+		# esconderia um build quebrado atrás de uma página que "carrega".
+		file_server
+	}
+
+	# -------------------------------------------------------------------------
+	# Todo o resto: arquivo real quando existir, `index.html` quando não.
+	#
+	# É o que faz `/agendamento/<token>`, `/login`, `/admin/agenda` e qualquer
+	# outra rota do React funcionarem por acesso direto e por F5.
+	#
+	# Rota de frontend inexistente também cai aqui — e quem decide que ela não
+	# existe é a APLICAÇÃO, na rota `path="*"`, que mostra "Página não
+	# encontrada". O host não tem como saber quais caminhos o React conhece.
+	# -------------------------------------------------------------------------
+	handle {
+		# `index.html` nunca fica em cache: é ele que aponta para os assets com
+		# hash novo depois de cada publicação.
+		header /index.html Cache-Control "no-cache, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}

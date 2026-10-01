@@ -13,20 +13,63 @@ ser possível por descuido de configuração.
 
 ## Ordem do fluxo
 
+Há **duas** ordens, e a diferença não é arbitrária: depende de abrir a cobrança
+ter ou não efeito no mundo.
+
+### Pix estático (o caminho em produção)
+
 ```
-cliente solicita        → PENDING           (horário segurado)
-barbeiro aprova         → AWAITING_PAYMENT  (horário segurado, janela de pagamento)
+cliente solicita        → PENDING + Payment PENDING   (horário segurado, Pix já na tela)
 cliente paga
-provedor notifica       → webhook valida
-backend confirma        → CONFIRMED
+cliente avisa           → paymentReportedAt           (NÃO confirma nada)
+barbearia confere extrato
+barbearia confirma      → Payment PAID + CONFIRMED    (transação única)
                           ↓
                         botão "Confirmar pelo WhatsApp"
 ```
 
-Cobrar **depois** da aprovação, não antes: cobrar primeiro seria cobrar quem vai
-ser recusado, e devolver dinheiro é pior que esperar.
+O Pix nasce **com a solicitação**. Mostrar um BR Code estático não cobra
+ninguém: é a chave da barbearia com um valor sugerido, e só sai dinheiro se a
+pessoa decidir pagar. Em troca, quem acabou de pedir horário paga ali, com o
+celular na mão — antes essa pessoa via "aguardando aprovação", guardava o
+celular e muitas vezes não voltava.
+
+O agendamento fica em `PENDING` até a decisão final. Ver o QR não aprova nada.
+
+A confirmação é **uma porta só**: `Confirmar pagamento e agendamento`, que marca
+`Payment → PAID` e `Appointment → CONFIRMED` na mesma transação. Aprovar "no
+seco" pela rota de decisão é recusado com 409 enquanto existir cobrança não paga
+— duas portas para o mesmo destino é como um agendamento termina confirmado sem
+pagamento.
+
+### Provedor dinâmico
+
+```
+cliente solicita        → PENDING           (horário segurado)
+barbeiro aprova         → AWAITING_PAYMENT  (janela de pagamento)
+cliente paga
+provedor notifica       → webhook valida
+backend confirma        → CONFIRMED
+```
+
+Aqui a ordem antiga permanece, de propósito. Abrir cobrança no provedor é efeito
+externo de verdade, com identificador de terceiro e dinheiro capturável; criá-la
+antes da aprovação seria cobrar quem ainda pode ser recusado, e uma recusa
+passaria a exigir devolução — que este sistema não faz automaticamente.
 
 Janela vencida sem pagamento → `EXPIRED`, e o horário volta a ser oferecido.
+
+### Recusar não devolve dinheiro
+
+Com `paymentReportedAt` preenchido ou pagamento já `PAID`, a recusa exige
+`acknowledgePaidReport` — sem ele, 409. Um clique a mais é barato; já ter
+recusado, não.
+
+Recusa não gera devolução automática em nenhum caso: o Pix estático cai direto
+na conta da barbearia e só ela pode devolver, por fora. Cobrança não paga vira
+`CANCELED` (ninguém deve pagar horário recusado); cobrança `PAID` **permanece
+PAID**, porque apagar esse registro esconderia que existe devolução pendente. A
+auditoria guarda valor, estado e instante da declaração.
 
 ## Dois estados, não um
 
@@ -36,15 +79,19 @@ não reescreve o histórico financeiro.
 
 | Agendamento | Dinheiro | Situação |
 | --- | --- | --- |
-| `PENDING` | — | aguardando o barbeiro; sem cobrança |
-| `AWAITING_PAYMENT` | `PENDING` | aprovado, esperando pagar |
-| `AWAITING_PAYMENT` | `FAILED` | recusado; dá para tentar de novo no prazo |
+| `PENDING` | — | aguardando o barbeiro; sem cobrança (sem pagamento ou serviço gratuito) |
+| `PENDING` | `PENDING` | Pix na tela, esperando pagar — **o caminho normal** |
+| `PENDING` | `PENDING` + `paymentReportedAt` | cliente avisou; aguardando conferência |
+| `PENDING` | `FAILED` | Pix não localizado; dá para tentar de novo no prazo |
+| `AWAITING_PAYMENT` | `PENDING` | provedor dinâmico: aprovado, esperando pagar |
 | `CONFIRMED` | `PAID` | único estado final de sucesso |
 | `EXPIRED` | `EXPIRED` | prazo venceu; horário liberado |
-| `REJECTED` | — | barbeiro recusou; nunca houve cobrança |
+| `REJECTED` | — | recusado sem que houvesse cobrança |
+| `REJECTED` | `CANCELED` | recusado com cobrança aberta; nada foi pago |
+| `REJECTED` | `PAID` | recusado com dinheiro recebido: **devolução manual pendente** |
 
-`CONFIRMED` exige as **duas** coisas: aprovação do barbeiro e dinheiro
-confirmado pelo backend.
+`CONFIRMED` exige as **duas** coisas: decisão da barbearia e dinheiro
+confirmado. No Pix estático as duas acontecem no mesmo ato.
 
 ## O horário fica reservado durante o pagamento
 
@@ -149,16 +196,18 @@ agendamento confirmado — o estado da reserva não depende disso.
 Registrados aqui porque são exatamente os pontos onde "pagamento é opcional"
 deixa de ser óbvio.
 
-### Referência pública nasce em toda aprovação
+### Referência pública nasce com a solicitação
 
-A referência é reservada ao aprovar, **com ou sem pagamento configurado**. Ligada
+A referência é sorteada na **criação**, com ou sem pagamento configurado. Ligada
 apenas ao caminho de pagamento, um agendamento confirmado numa instalação sem
 provedor — a configuração padrão — ficava sem referência, e a confirmação pelo
-WhatsApp nunca aparecia, porque o link depende dela.
+WhatsApp nunca aparecia, porque o link depende dela. Presa à aprovação, um pedido
+pendente não tinha identificador nenhum que pudesse circular.
 
-Ela também é gravada **antes** da chamada ao provedor, sob lock da linha. Sorteada
-só em memória, duas aprovações simultâneas geravam referências diferentes e duas
-cobranças; a do perdedor ficava órfã — sem linha no banco e ainda pagável.
+Na aprovação de reservas antigas que ainda não a tenham, ela é gravada **antes**
+da chamada ao provedor, sob lock da linha. Sorteada só em memória, duas
+aprovações simultâneas geravam referências diferentes e duas cobranças; a do
+perdedor ficava órfã — sem linha no banco e ainda pagável.
 
 ### Serviço de preço zero
 
@@ -166,8 +215,10 @@ O catálogo aceita `priceCents: 0` (cortesia, retoque incluso). Com pagamento
 ligado, abrir cobrança de zero violava o CHECK `amount_cents > 0`: a aprovação
 falhava com erro interno e o pedido ficava preso em `PENDING` para sempre.
 
-Sem valor a cobrar, aprovar confirma direto — igual a uma instalação sem
-pagamento. A cobrança só existe quando há o que cobrar.
+Sem valor a cobrar, nenhuma cobrança nasce com a solicitação e aprovar confirma
+direto — igual a uma instalação sem pagamento. A cobrança só existe quando há o
+que cobrar, e é a ausência dela que devolve o botão `Confirmar agendamento` ao
+painel.
 
 ### Cancelar durante a janela de pagamento
 
@@ -474,3 +525,27 @@ Validação local: `prisma migrate deploy`, `prisma migrate status` e
 `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code`.
 Os CHECKs e o índice parcial também são verificados diretamente no PostgreSQL,
 pois o diff do Prisma não representa toda restrição SQL.
+
+## Marca e titular da chave são coisas diferentes
+
+`ErickCorttes` é o **nome comercial**: aparece na interface, nas mensagens de
+WhatsApp e na descrição da cobrança de provedor.
+
+`BARBERSHOP_PIX_RECEIVER_NAME` é o **titular da chave Pix**: é o nome que o
+aplicativo do banco do cliente mostra ao ler o QR, e é o campo 59 do BR Code.
+
+O sistema **nunca** usa a marca como titular — não existe fallback. Os dois podem
+divergir, e durante os testes divergem de propósito: a chave pode ser de quem está
+validando o fluxo, e aí o titular é essa pessoa.
+
+Por isso a tela mostra **"Recebedor"** em linha própria, separado da chave. Juntar
+os dois levaria o cliente a achar que paga para "ErickCorttes" quando o nome no
+banco dele será outro — e desconfiança na hora de pagar custa o pagamento.
+
+Na entrega, `BARBERSHOP_PIX_KEY` e `BARBERSHOP_PIX_RECEIVER_NAME` trocam **juntas**
+pelos dados do recebedor definitivo.
+
+**Não há validação de titularidade.** Com Pix estático não existe como provar que
+o nome configurado é o dono da chave; o sistema não afirma em lugar nenhum que
+houve conferência bancária. Quem garante é quem configura. Um provedor real poderá
+validar isso no futuro.

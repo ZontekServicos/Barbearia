@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/badge'
+import { Modal } from '@/components/ui/Modal'
 import PaymentSection from '@/components/admin/PaymentSection'
 import { ApiError } from '@/services/api'
 import {
@@ -13,7 +14,7 @@ import {
   updateAppointmentStatus,
   type AdminAppointment,  decideBookingRequest,
 } from '@/services/admin-booking'
-import { getBookingPolicy, type BookingPolicy } from '@/services/public-booking'
+
 
 const MONTHS = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -30,24 +31,21 @@ export default function AppointmentDetail() {
   const navigate = useNavigate()
   const [appointment, setAppointment] = useState<AdminAppointment | null>(null)
   /**
-   * Com pagamento configurado, aprovar NÃO confirma: abre a janela de
-   * pagamento. O botão precisa dizer o que realmente vai acontecer, então a
-   * política vem do servidor em vez de o texto ser chutado aqui.
+   * A política do servidor não é mais consultada aqui.
+   *
+   * Ela existia para o botão dizer se aprovar abriria a janela de pagamento. Com
+   * a cobrança nascendo junto com a solicitação, o que decide o texto é a
+   * PRÓPRIA cobrança deste agendamento (`appointment.payment`), que já vem no
+   * detalhe — e um fato concreto é melhor que uma configuração global. Buscar a
+   * política virava uma requisição por abertura de tela sem nada que a leia.
    */
-  const [policy, setPolicy] = useState<BookingPolicy | null>(null)
-  useEffect(() => {
-    let alive = true
-    void getBookingPolicy()
-      .then(next => { if (alive) setPolicy(next) })
-      // Sem política, o texto cai no genérico. Não é motivo para travar a tela.
-      .catch(() => {})
-    return () => { alive = false }
-  }, [])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pending, setPending] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  /** Recusa com Pix declarado passa por uma confirmação à parte. */
+  const [confirmingReject, setConfirmingReject] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -66,12 +64,16 @@ export default function AppointmentDetail() {
 
   /** Sem atualização otimista: o status só muda na tela depois do backend confirmar. */
   /** Confirma ou recusa uma solicitação pública que ainda aguarda decisão. */
-  async function handleDecision(decision: 'CONFIRMED' | 'REJECTED', label: string) {
+  async function handleDecision(
+    decision: 'CONFIRMED' | 'REJECTED',
+    label: string,
+    acknowledgePaidReport?: boolean,
+  ) {
     if (!id) return
     setPending(label)
     setActionError(null)
     try {
-      setAppointment(await decideBookingRequest(id, decision))
+      setAppointment(await decideBookingRequest(id, decision, acknowledgePaidReport))
       setToast(label + '.')
       setTimeout(() => setToast(null), 3000)
     } catch (err) {
@@ -134,6 +136,24 @@ export default function AppointmentDetail() {
     },
     { icon: DollarSign, label: 'Valor', value: `R$ ${appointment.servicePriceFormatted}` },
   ]
+
+  /**
+   * Cobrança em aberto: a confirmação é a do pagamento, não a daqui.
+   *
+   * Espelha exatamente a guarda do servidor (cobrança existente que não está
+   * `PAID`). Divergir aqui faria a tela oferecer um botão que o backend recusa.
+   */
+  const awaitingMoney = appointment.payment != null && appointment.payment.status !== 'PAID'
+
+  /**
+   * Há dinheiro de outra pessoa em jogo.
+   *
+   * Declarado pelo cliente ou já confirmado: nos dois casos, recusar é decisão
+   * com consequência financeira, e não existe devolução automática.
+   */
+  const moneyAtStake =
+    appointment.payment != null &&
+    (appointment.payment.reportedAt != null || appointment.payment.status === 'PAID')
 
   return (
     <div className="max-w-xl">
@@ -202,31 +222,45 @@ export default function AppointmentDetail() {
 
         {appointment.status === 'PENDING' ? (
           <>
-            <p className="text-sm text-[var(--muted-foreground)] mb-3">
-              Solicitação feita pelo WhatsApp do cliente. O horário está segurado até você decidir.
-              {policy?.paymentRequired && (
-                <>
-                  {' '}Aprovar libera o pagamento: o cliente terá{' '}
-                  {policy.paymentWindowMinutes} minutos para pagar, e a confirmação
-                  acontece sozinha quando o pagamento entrar.
-                </>
-              )}
-            </p>
-            <Button
-              className="w-full h-11 mb-2"
-              onClick={() => void handleDecision('CONFIRMED', 'Agendamento confirmado')}
-              disabled={pending !== null}
-            >
-              {pending === 'Agendamento confirmado'
-                ? 'Processando...'
-                : policy?.paymentRequired
-                  ? 'Aprovar e enviar cobrança'
-                  : 'Confirmar agendamento'}
-            </Button>
+            {/*
+              Com cobrança em aberto, confirmar NÃO passa por aqui.
+              O Pix já está na tela do cliente desde a solicitação, e a
+              confirmação acontece junto com o pagamento, na seção Pagamento
+              acima — numa transação só. Oferecer "aprovar" aqui bateria no 409
+              do servidor e, se passasse, confirmaria o horário de quem não
+              pagou. A condição é a MESMA que o servidor aplica.
+            */}
+            {awaitingMoney ? (
+              <p className="text-sm text-[var(--muted-foreground)] mb-3">
+                O Pix já está na tela do cliente e o horário segue segurado até o prazo.
+                Para confirmar, confira o extrato e use{' '}
+                <strong className="text-[var(--foreground)]">Confirmar pagamento e agendamento</strong>{' '}
+                em Pagamento.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-[var(--muted-foreground)] mb-3">
+                  Solicitação feita pelo WhatsApp do cliente. O horário está segurado até você decidir.
+                </p>
+                <Button
+                  className="w-full h-11 mb-2"
+                  onClick={() => void handleDecision('CONFIRMED', 'Agendamento confirmado')}
+                  disabled={pending !== null}
+                >
+                  {pending === 'Agendamento confirmado' ? 'Processando...' : 'Confirmar agendamento'}
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               className="w-full h-11"
-              onClick={() => void handleDecision('REJECTED', 'Solicitação recusada')}
+              /* Com dinheiro em jogo, a recusa passa por uma confirmação à
+                 parte: recusar não devolve nada automaticamente. */
+              onClick={() =>
+                moneyAtStake
+                  ? setConfirmingReject(true)
+                  : void handleDecision('REJECTED', 'Solicitação recusada')
+              }
               disabled={pending !== null}
             >
               {pending === 'Solicitação recusada' ? 'Processando...' : 'Recusar solicitação'}
@@ -291,6 +325,54 @@ export default function AppointmentDetail() {
           </Link>
         </div>
       </div>
+
+      {/*
+        Recusar com Pix declarado ou já confirmado.
+
+        Um clique a mais aqui é barato; já ter recusado, não. O texto diz o que
+        o sistema NÃO faz — devolver dinheiro — porque é a parte que a pessoa
+        precisa assumir antes de clicar, e não depois de descobrir.
+      */}
+      {confirmingReject && appointment.payment && (
+        <Modal titleId="reject-with-payment" onClose={() => setConfirmingReject(false)}>
+          <h2 id="reject-with-payment" className="text-lg font-bold mb-2">
+            Recusar com pagamento em jogo?
+          </h2>
+          <p className="text-sm text-[var(--muted-foreground)] mb-3">
+            {appointment.payment.status === 'PAID'
+              ? `Este pagamento de R$ ${appointment.payment.amountFormatted} já foi confirmado.`
+              : `O cliente informou ter pagado R$ ${appointment.payment.amountFormatted}.`}
+          </p>
+          <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3.5 py-3 mb-4 flex gap-2.5">
+            <AlertCircle className="h-4 w-4 text-amber-300 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-200">
+              Recusar <strong>não devolve</strong> o dinheiro. Se o Pix entrou, a devolução
+              é feita pela barbearia por fora, falando com o cliente.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setConfirmingReject(false)}
+              disabled={pending !== null}
+            >
+              Voltar
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1"
+              disabled={pending !== null}
+              onClick={() => {
+                setConfirmingReject(false)
+                void handleDecision('REJECTED', 'Solicitação recusada', true)
+              }}
+            >
+              Recusar mesmo assim
+            </Button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

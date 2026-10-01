@@ -287,14 +287,20 @@ export function toAdminAppointment(
           amountFormatted: formatCents(payment.amountCents),
           /**
            * Confirmação manual exige as quatro condições juntas:
-           * Pix da barbearia, cobrança em aberto, horário aguardando pagamento
-           * e prazo ainda válido. Cobrança de provedor nunca — ali quem
+           * Pix da barbearia, cobrança em aberto, horário ainda esperando o
+           * dinheiro e prazo válido. Cobrança de provedor nunca — ali quem
            * confirma é o webhook dele.
+           *
+           * "Esperando o dinheiro" são DOIS estados: `PENDING`, que é o normal
+           * desde que o Pix nasce com a solicitação, e `AWAITING_PAYMENT`, das
+           * reservas criadas antes dessa mudança. Deixar `PENDING` de fora
+           * esconderia o botão de confirmar justamente no caso comum — a
+           * barbearia veria o Pix no extrato e não teria onde registrar.
            */
           canConfirmManually:
             payment.provider === STATIC_PIX &&
             payment.status === "PENDING" &&
-            view.status === "AWAITING_PAYMENT" &&
+            (view.status === "AWAITING_PAYMENT" || view.status === "PENDING") &&
             !windowClosed,
           expiresAt: deadline!.toISOString(),
           expiresInSeconds: Math.max(0, Math.floor((deadline!.getTime() - now.getTime()) / 1000)),

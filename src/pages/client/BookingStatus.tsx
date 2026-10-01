@@ -21,10 +21,15 @@ import { cn } from '@/lib/utils'
  * Acompanhamento de UMA solicitação: aprovação, pagamento e confirmação.
  *
  * Por que é uma tela separada do fluxo de agendamento, e não um sexto passo do
- * stepper: o pagamento só existe DEPOIS da aprovação do barbeiro, que acontece
- * minutos ou horas mais tarde. Quem acabou de solicitar fecha o navegador e
- * volta depois — não há como pagar na mesma visita. Um passo 6 prometeria uma
- * etapa que aquela sessão não pode cumprir.
+ * stepper: ela é o lugar onde a pessoa VOLTA. A confirmação depende de a
+ * barbearia conferir o extrato, o que acontece minutos ou horas mais tarde, e
+ * quem fecha o navegador precisa reencontrar tudo pelo link — o Pix, o prazo e,
+ * no fim, a confirmação. Um passo 6 do stepper existiria só naquela sessão.
+ *
+ * O Pix, porém, já está aqui na primeira visita: a cobrança nasce com a
+ * solicitação, então quem quer pagar na hora paga, sem esperar aprovação. O
+ * agendamento segue PENDING até a barbearia decidir — e esta tela nunca diz
+ * "confirmado" antes disso.
  *
  * A chave é o token da solicitação, entregue uma única vez na criação e guardado
  * localmente. Telefone não abre nada aqui: quem tem o token vê aquele pedido e
@@ -45,7 +50,11 @@ export default function BookingStatus() {
   const [phase, setPhase] = useState<Phase>(token ? 'loading' : 'missing')
   const [view, setView] = useState<BookingRequestView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** Consulta manual em andamento. Mantém o botão ocupado sem piscar a tela. */
+  const [refreshing, setRefreshing] = useState(false)
   const inFlight = useRef<AbortController | null>(null)
+  /** Último estado conhecido, legível por funções estáveis (ver `load`). */
+  const latest = useRef<BookingRequestView | null>(null)
   const [reportFallbackUrl, setReportFallbackUrl] = useState<string | null>(null)
 
   const load = useCallback(
@@ -58,6 +67,7 @@ export default function BookingStatus() {
       try {
         const next = await getBookingRequest(token, { signal: controller.signal })
         if (controller.signal.aborted) return
+        latest.current = next
         setView(next)
         setError(null)
         setPhase('ready')
@@ -75,20 +85,51 @@ export default function BookingStatus() {
             ? err.message
             : 'Não foi possível consultar sua solicitação.',
         )
-        // Uma falha de rede não apaga o que já estava na tela.
-        setPhase(view ? 'ready' : 'error')
+        /**
+         * Uma falha de rede não apaga o que já estava na tela.
+         *
+         * O último estado conhecido é lido do REF, não do closure: `load` é
+         * estável de propósito (ver dependências), então uma cópia de `view`
+         * capturada aqui ficaria velha e poderia jogar a tela para o estado de
+         * erro mesmo havendo dados bons já renderizados.
+         */
+        setPhase(latest.current ? 'ready' : 'error')
       } finally {
         if (inFlight.current === controller) inFlight.current = null
       }
     },
-    [token, view],
+    /**
+     * Só o token. `load` precisa ser ESTÁVEL: ela é capturada por intervalos e
+     * por ouvintes de evento, e recriá-la a cada mudança de `view` deixava
+     * versões velhas rodando — com um `view` velho dentro, e com o risco de
+     * ouvintes registrados apontarem para uma função que já não é a atual.
+     */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [token],
   )
+
+  /**
+   * Consulta manual do botão "Atualizar".
+   *
+   * `quiet` para a tela não voltar ao esqueleto de carregamento: o estado atual
+   * continua visível enquanto a resposta vem, e só o botão mostra progresso.
+   * Cliques repetidos são ignorados enquanto a anterior não termina.
+   */
+  const refresh = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      await load({ quiet: true })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [load, refreshing])
 
   useEffect(() => {
     void load()
     return () => inFlight.current?.abort()
-    // Só o token define a consulta. `load` muda a cada render por depender de
-    // `view`, e incluí-lo aqui recriaria o efeito em laço.
+    // Só o token define a consulta. `load` é mantida estável e lê o último
+    // estado pelo ref, evitando recriar o efeito a cada resposta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
@@ -100,13 +141,42 @@ export default function BookingStatus() {
    * consultando seria bater no servidor à toa.
    */
   const status = view?.appointment.status
+  /**
+   * Estados que ainda podem mudar por ação de outra pessoa.
+   *
+   * CONFIRMED, REJECTED, CANCELLED, EXPIRED, COMPLETED e NO_SHOW são finais:
+   * continuar consultando ali seria bater no servidor sem motivo.
+   */
   const watching = status === 'PENDING' || status === 'AWAITING_PAYMENT'
   useEffect(() => {
     if (!watching) return
     const timer = setInterval(() => void load({ quiet: true }), POLL_MS)
     return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watching, token])
+  }, [watching, load])
+
+  /**
+   * Volta para a aba: consulta na hora.
+   *
+   * É a correção do sintoma relatado. O navegador estrangula — às vezes
+   * suspende — `setInterval` em aba de segundo plano, então quem aprova no
+   * painel em outra aba e volta para cá encontrava a tela parada no estado
+   * antigo até o intervalo voltar a rodar. Esperar o próximo ciclo não serve:
+   * a pessoa está olhando agora.
+   *
+   * `focus` entra junto porque cobre voltar ao navegador sem trocar de aba.
+   */
+  useEffect(() => {
+    if (!watching) return
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void load({ quiet: true })
+    }
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [watching, load])
 
   if (phase === 'missing') {
     return (
@@ -151,7 +221,11 @@ export default function BookingStatus() {
       <StatusHeader view={view} />
       <Details view={view} />
 
-      {view.appointment.status === 'AWAITING_PAYMENT' && view.payment && (
+      {/* PENDING entra junto: a cobrança nasce com a solicitação, então o Pix
+          aparece antes de qualquer decisão da barbearia. AWAITING_PAYMENT
+          continua valendo para pedidos criados antes dessa mudança. */}
+      {(view.appointment.status === 'AWAITING_PAYMENT' ||
+        view.appointment.status === 'PENDING') && view.payment && (
         <PaymentPanel
           payment={view.payment}
           pix={view.pix}
@@ -181,7 +255,9 @@ export default function BookingStatus() {
         />
       )}
 
-      {view.appointment.status === 'AWAITING_PAYMENT' && view.paymentReported && reportFallbackUrl && (
+      {(view.appointment.status === 'PENDING' ||
+        view.appointment.status === 'AWAITING_PAYMENT') &&
+        view.paymentReported && reportFallbackUrl && (
         <p role="status" className="text-sm text-[var(--muted-foreground)]">
           Se o WhatsApp não abriu, você pode{' '}
           <a href={reportFallbackUrl} target="_blank" rel="noopener noreferrer" className="text-[var(--primary)] underline">
@@ -215,10 +291,11 @@ export default function BookingStatus() {
           <Button
             variant="outline"
             className="w-full h-11"
-            onClick={() => void load()}
+            onClick={() => void refresh()}
+            disabled={refreshing}
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Atualizar
+            <RefreshCw className={cn('h-4 w-4 mr-2', refreshing && 'animate-spin')} />
+            {refreshing ? 'Atualizando...' : 'Atualizar'}
           </Button>
         )}
         <Button variant="ghost" className="w-full h-11 text-[var(--muted-foreground)]" asChild>
@@ -237,9 +314,26 @@ function StatusHeader({ view }: { view: BookingRequestView }) {
   const presentation = {
     PENDING: {
       icon: <Hourglass className="h-9 w-9 text-[var(--primary)]" />,
-      title: 'Aguardando aprovação',
-      // Nunca "confirmado" antes de a barbearia decidir.
-      message: 'A barbearia está avaliando seu pedido. Seguramos este horário enquanto isso.',
+      /**
+       * O título depende de haver pagamento a fazer.
+       *
+       * Com Pix na tela, "Aguardando aprovação" faz a pessoa guardar o celular e
+       * esperar — exatamente o contrário do que a tela está pedindo. Sem Pix
+       * (instalação sem pagamento), a espera é mesmo pela barbearia.
+       *
+       * Em nenhum dos casos a palavra "confirmado" aparece: o agendamento só
+       * está confirmado depois de a barbearia decidir.
+       */
+      title: !view.payment
+        ? 'Aguardando aprovação'
+        : view.paymentReported
+          ? 'Pagamento informado'
+          : 'Falta o pagamento',
+      message: !view.payment
+        ? 'A barbearia está avaliando seu pedido. Seguramos este horário enquanto isso.'
+        : view.paymentReported
+          ? 'Aguarde a conferência da barbearia para o horário ser confirmado.'
+          : 'Pague o Pix abaixo e avise a barbearia. Seguramos este horário até o prazo.',
     },
     AWAITING_PAYMENT: {
       icon: <Clock className="h-9 w-9 text-[var(--primary)]" />,
@@ -359,8 +453,8 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 /**
  * Painel de pagamento.
  *
- * O estado só muda quando o backend valida o webhook ou a decisão do ADMIN.
- * O CTA "Já fiz o Pix" apenas abre uma conversa, sem confirmar pagamento.
+ * O CTA "Já fiz o Pix" registra somente a declaração do cliente e abre a
+ * conversa. Pagamento e agendamento continuam pendentes até a decisão do ADMIN.
  */
 function PaymentPanel({
   payment,

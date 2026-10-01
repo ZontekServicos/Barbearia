@@ -115,7 +115,7 @@ export const updateBusinessHoursSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const createBlockSchema = z
-  .object({
+  .strictObject({
     date: shopDateSchema,
     startsAt: clockSchema,
     endsAt: clockSchema,
@@ -268,6 +268,15 @@ export const publicTokenParamSchema = z.object({
 
 export const decideRequestSchema = z.strictObject({
   decision: z.enum(["CONFIRMED", "REJECTED"]),
+  /**
+   * "Sim, recusar mesmo com Pix declarado."
+   *
+   * Só tem efeito ao recusar: sem isto, uma recusa sobre pedido com pagamento
+   * declarado (ou já pago) é barrada com 409, para o segundo clique ser uma
+   * decisão e não um reflexo. Recusar não devolve dinheiro — a devolução, se
+   * houver, é feita pela barbearia por fora.
+   */
+  acknowledgePaidReport: z.boolean().optional(),
 })
 
 /**
@@ -289,3 +298,20 @@ export const settlePaymentSchema = z.strictObject({
  * `paymentReportedAt`, `reviewExpiresAt` — é recusado, não ignorado.
  */
 export const reportPaymentSchema = z.strictObject({})
+
+/** Grade administrativa de disponibilidade de um dia, para um serviço. */
+export const adminAvailabilityQuerySchema = z.object({
+  date: shopDateSchema,
+  serviceId: z.uuid("Serviço inválido."),
+})
+
+/**
+ * Bloqueio do dia inteiro.
+ *
+ * `strictObject`: nada de `startsAt`/`endsAt` vindo do navegador — o dia inteiro
+ * é de meia-noite a meia-noite, calculado no servidor no fuso da barbearia.
+ */
+export const blockWholeDaySchema = z.strictObject({
+  date: shopDateSchema,
+  reason: z.string().trim().min(2, "Descreva o motivo.").max(160),
+})

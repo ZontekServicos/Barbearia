@@ -17,6 +17,33 @@ const appointment = (id: string, clock: string, date = '2026-09-24') => ({
 })
 const ok = (route: Route, data: unknown) => route.fulfill({ json: { success: true, data } })
 
+/**
+ * Disponibilidade COM grade do dia inteiro.
+ *
+ * `slots` continua sendo só o que pode ser reservado, e `grid` descreve o dia
+ * todo. Montar os dois da mesma lista é de propósito: eles não podem se
+ * contradizer, e um mock que os contradiga esconderia justamente o defeito.
+ */
+const withGrid = (
+  entries: Array<[clock: string, available: boolean]>,
+  reason: string | null = null,
+  duration = 30,
+) => ({
+  slots: entries.filter(([, free]) => free).map(([clock]) => slot(clock, duration)),
+  grid: entries.map(([clock, free]) => {
+    const base = slot(clock, duration)
+    return {
+      startsAtClock: base.startsAtClock,
+      endsAtClock: base.endsAtClock,
+      startsAt: base.startsAt,
+      available: free,
+    }
+  }),
+  reason,
+})
+/** Botões de horário: os que mostram uma hora, livres ou cinzas. */
+const slotButtons = (page: Page) => page.locator('main button').filter({ hasText: /^\d{2}:\d{2}$/ })
+
 async function setup(page: Page) {
   await page.clock.setFixedTime(new Date('2026-09-24T15:00:00Z'))
   await page.addInitScript(() => {
@@ -226,6 +253,296 @@ test.describe('current booking components in Chromium', () => {
     await expect(page.getByText('A barbearia está fechada nesta data.')).toBeVisible()
     await expect(page.getByRole('heading', { name: /^(Manhã|Tarde|Noite)$/ })).toHaveCount(0)
   })
+
+  // -------------------------------------------------------------------------
+  // Grade pública: mostra o dia inteiro, conta nada
+  // -------------------------------------------------------------------------
+
+  test('public grid greys out taken slots instead of hiding them', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route =>
+      ok(route, withGrid([['09:00', true], ['09:40', false], ['10:20', true]])))
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+    // Os três continuam na tela: a grade não encurta e não deixa buraco.
+    await expect(slotButtons(page)).toHaveCount(3)
+    await expect(page.getByRole('button', { name: '09:00', exact: true })).toBeEnabled()
+    await expect(page.getByRole('button', { name: '10:20', exact: true })).toBeEnabled()
+    const taken = page.getByRole('button', { name: '09:40 indisponível' })
+    await expect(taken).toBeVisible()
+    await expect(taken).toBeDisabled()
+  })
+
+  test('public grid shows only the clock on each slot — no Ocupado/Disponivel label', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route =>
+      ok(route, withGrid([['09:00', true], ['09:40', false], ['10:20', false]])))
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+    // O texto visível de todo botão de horário é só a hora.
+    for (const label of await slotButtons(page).allInnerTexts()) {
+      expect(label.trim()).toMatch(/^\d{2}:\d{2}$/)
+    }
+    // E nada na tela rotula o horário nem entrega o motivo.
+    const text = await page.locator('main').innerText()
+    expect(text).not.toMatch(/\b(Ocupado|Reservado|Indispon[íi]vel|Livre)\b/i)
+    expect(text).not.toMatch(/APPOINTMENT|BLOCK|OUTSIDE_HOURS/)
+  })
+
+  test('tapping an unavailable slot selects nothing', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route =>
+      ok(route, withGrid([['09:00', true], ['09:40', false]])))
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+    const next = page.getByRole('button', { name: 'Continuar', exact: true })
+    await expect(next).toBeDisabled()
+    // `force` porque o botão está desabilitado: é exatamente o que se testa.
+    await page.getByRole('button', { name: '09:40 indisponível' }).click({ force: true })
+    await expect(next).toBeDisabled()
+    // O livre ao lado continua funcionando.
+    await page.getByRole('button', { name: '09:00', exact: true }).click()
+    await expect(next).toBeEnabled()
+  })
+
+  test('fully booked day keeps the whole grid visible and greyed, with a day-level notice', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route =>
+      ok(route, withGrid([['09:00', false], ['09:40', false], ['10:20', false]], 'FULLY_BOOKED')))
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+    // O recado é sobre o DIA; a grade segue à mostra, inteira.
+    await expect(page.getByText('Todos os horários deste dia já foram reservados.')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Manhã', exact: true })).toBeVisible()
+    await expect(slotButtons(page)).toHaveCount(3)
+    for (const clock of ['09:00', '09:40', '10:20']) {
+      await expect(page.getByRole('button', { name: clock + ' indisponível' })).toBeDisabled()
+    }
+    await expect(page.getByRole('button', { name: 'Continuar', exact: true })).toBeDisabled()
+    // Não é o estado de dia fechado: aqui há grade, então não oferece trocar a data.
+    await expect(page.getByRole('button', { name: 'Escolher outra data' })).toHaveCount(0)
+  })
+
+  test('closed day has no grid at all, only the reason', async ({ page }) => {
+    await page.route('**/api/booking/availability?**', route =>
+      ok(route, { slots: [], grid: [], reason: 'CLOSED' }))
+    await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+    await expect(page.getByText('A barbearia está fechada nesta data.')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Escolher outra data' })).toBeVisible()
+    await expect(slotButtons(page)).toHaveCount(0)
+  })
+
+  for (const width of [360, 375, 390, 412, 430]) {
+    test('public grid mobile ' + width + ': greyed slots fit and keep 44px targets', async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await page.route('**/api/booking/availability?**', route => ok(route, withGrid([
+        ['09:00', true], ['09:40', false], ['10:20', false], ['11:00', true],
+        ['14:00', false], ['15:20', true], ['18:00', false], ['18:40', true],
+      ])))
+      await open(page, 'schedule'); await fillContact(page); await chooseService(page); await chooseDate(page)
+
+      for (const period of ['Manhã', 'Tarde', 'Noite']) {
+        await expect(page.getByRole('heading', { name: period, exact: true })).toBeVisible()
+      }
+      await expect(slotButtons(page)).toHaveCount(8)
+      // Horário cinza também é alvo de toque: continua com 44px e dentro da tela.
+      await noOverflow(page); await touchTargets(page)
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // Grade administrativa: o motivo, e a ação que ele permite
+  // -------------------------------------------------------------------------
+
+  type AdminState = 'FREE' | 'APPOINTMENT' | 'BLOCK' | 'OUTSIDE_HOURS' | 'PAST'
+  const adminSlot = (
+    clock: string,
+    state: AdminState,
+    ids: { blockId?: string; blockReason?: string; appointmentId?: string } = {},
+  ) => {
+    const base = slot(clock, 30)
+    return {
+      startsAtClock: base.startsAtClock,
+      endsAtClock: base.endsAtClock,
+      startsAt: base.startsAt,
+      available: state === 'FREE',
+      reason: state === 'FREE' ? null : state,
+      blockId: ids.blockId ?? null,
+      blockReason: ids.blockReason ?? null,
+      appointmentId: ids.appointmentId ?? null,
+    }
+  }
+
+  type Write = { method: string; path: string; data: any }
+  async function openAvailability(page: Page, options: {
+    grid: Array<ReturnType<typeof adminSlot>>
+    blocks?: Array<{ id: string; startsAtClock: string; endsAtClock: string; reason: string }>
+    open?: boolean
+  }) {
+    const writes: Write[] = []
+    await page.route('**/api/admin/services**', route => ok(route, { services: [service30] }))
+    await page.route('**/api/admin/availability**', route => ok(route, {
+      date: '2026-09-24', serviceId: service30.id, serviceName: service30.name,
+      durationMinutes: 30, reservedMinutes: 40, slotIntervalMinutes: 40,
+      open: options.open ?? true,
+      windows: [{ opensAt: '09:00', closesAt: '19:00' }],
+      grid: options.grid,
+    }))
+    await page.route('**/api/admin/blocks**', route => {
+      const request = route.request()
+      const method = request.method()
+      const path = new URL(request.url()).pathname
+      if (method === 'GET') {
+        return ok(route, { blocks: (options.blocks ?? []).map(block => ({ ...block, date: '2026-09-24', startsAt: '', endsAt: '' })) })
+      }
+      writes.push({ method, path, data: method === 'DELETE' ? null : request.postDataJSON() })
+      if (method === 'DELETE') return ok(route, { deleted: true })
+      return route.fulfill({ status: 201, json: { success: true, data: { block: { id: 'novo', date: '2026-09-24', startsAt: '', endsAt: '', startsAtClock: '09:00', endsAtClock: '09:40', reason: 'x' } } } })
+    })
+    await open(page, 'availability')
+    await expect(page.getByRole('heading', { name: 'Disponibilidade' })).toBeVisible()
+    return writes
+  }
+
+  test('admin grid names the reason behind every unavailable slot', async ({ page }) => {
+    await setup(page)
+    await openAvailability(page, { grid: [
+      adminSlot('09:00', 'FREE'),
+      adminSlot('09:40', 'APPOINTMENT', { appointmentId: 'apt-7' }),
+      adminSlot('10:20', 'BLOCK', { blockId: 'blk-1', blockReason: 'Dentista' }),
+      adminSlot('18:20', 'OUTSIDE_HOURS'),
+    ] })
+
+    // O motivo vai no nome acessível, não só na cor.
+    await expect(page.getByRole('button', { name: '09:00 — Livre' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '09:40 — Agendado' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '10:20 — Bloqueado' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '18:20 — Fora do expediente' })).toBeDisabled()
+    // Legenda, para a cor não virar adivinhação.
+    for (const label of ['Livre', 'Agendado', 'Bloqueado', 'Fora do expediente']) {
+      await expect(page.getByText(label, { exact: true }).first()).toBeVisible()
+    }
+  })
+
+  test('admin blocks one slot and it covers the reserved interval, not the duration', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, { grid: [adminSlot('09:00', 'FREE')] })
+
+    await page.getByRole('button', { name: '09:00 — Livre' }).click()
+    // Corte de 30 min, reserva de 40: o bloqueio tem de ir até 09:40.
+    await expect(page.getByText('Bloqueia 09:00–09:40', { exact: false })).toBeVisible()
+    await page.getByLabel('Motivo').fill('Consulta médica')
+    await page.getByRole('button', { name: 'Bloquear horário' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.method).toBe('POST')
+    expect(writes[0]!.path).toBe('/api/admin/blocks')
+    expect(writes[0]!.data).toEqual({ date: '2026-09-24', startsAt: '09:00', endsAt: '09:40', reason: 'Consulta médica' })
+    // A autoria NUNCA sai do navegador: quem bloqueou é a sessão no servidor.
+    expect(writes[0]!.data).not.toHaveProperty('createdById')
+  })
+
+  test('admin releases a manual block and is told it may cover more slots', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, {
+      grid: [adminSlot('10:20', 'BLOCK', { blockId: 'blk-1', blockReason: 'Dentista' })],
+    })
+
+    await page.getByRole('button', { name: '10:20 — Bloqueado' }).click()
+    await expect(page.getByText('Motivo: Dentista')).toBeVisible()
+    await expect(page.getByText(/bloqueio inteiro, que pode cobrir mais horários/)).toBeVisible()
+    await page.getByRole('button', { name: 'Liberar horário' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.method).toBe('DELETE')
+    expect(writes[0]!.path).toBe('/api/admin/blocks/blk-1')
+  })
+
+  test('a booked slot offers no release — only the way to the appointment', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, {
+      grid: [adminSlot('09:40', 'APPOINTMENT', { appointmentId: 'apt-7' })],
+    })
+
+    await page.getByRole('button', { name: '09:40 — Agendado' }).click()
+    // É a garantia central do requisito: nada de liberar sobre cliente marcado.
+    await expect(page.getByRole('button', { name: /Liberar/ })).toHaveCount(0)
+    await expect(page.getByText(/Desmarcar passa pelo cancelamento/)).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Ver agendamento' })).toHaveAttribute('href', '/admin/agenda/apt-7')
+    expect(writes).toEqual([])
+  })
+
+  test('blocking the whole day warns that existing appointments stay', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, { grid: [adminSlot('09:00', 'FREE')] })
+
+    await page.getByRole('button', { name: 'Bloquear o dia' }).click()
+    await expect(page.getByText(/Agendamento já marcado continua valendo/)).toBeVisible()
+    await page.getByLabel('Motivo').fill('Feriado')
+    await page.getByRole('button', { name: 'Bloquear o dia', exact: true }).last().click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.path).toBe('/api/admin/blocks/whole-day')
+    expect(writes[0]!.data).toEqual({ date: '2026-09-24', reason: 'Feriado' })
+  })
+
+  test('blocking a range posts the real interval and refuses an inverted one', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, { grid: [adminSlot('09:00', 'FREE')] })
+
+    await page.getByRole('button', { name: 'Bloquear intervalo' }).click()
+    // Fim antes do início não chega ao servidor.
+    await page.getByLabel('Início').fill('11:00')
+    await page.getByLabel('Fim').fill('09:30')
+    await page.getByLabel('Motivo').fill('Entrega')
+    await page.getByRole('button', { name: 'Bloquear', exact: true }).click()
+    await expect(page.getByRole('alert')).toContainText('O fim deve ser depois do início.')
+    expect(writes).toEqual([])
+
+    // Intervalo que não coincide com início de slot é aceito como intervalo.
+    await page.getByLabel('Início').fill('09:30')
+    await page.getByLabel('Fim').fill('11:00')
+    await page.getByRole('button', { name: 'Bloquear', exact: true }).click()
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.data).toEqual({ date: '2026-09-24', startsAt: '09:30', endsAt: '11:00', reason: 'Entrega' })
+  })
+
+  test('the day block list releases a whole range at once', async ({ page }) => {
+    await setup(page)
+    const writes = await openAvailability(page, {
+      grid: [adminSlot('09:00', 'BLOCK', { blockId: 'blk-9' })],
+      blocks: [{ id: 'blk-9', startsAtClock: '09:30', endsAtClock: '11:00', reason: 'Entrega de material' }],
+    })
+
+    await expect(page.getByText('09:30–11:00')).toBeVisible()
+    await expect(page.getByText('Entrega de material')).toBeVisible()
+    await page.getByRole('button', { name: 'Liberar' }).click()
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.path).toBe('/api/admin/blocks/blk-9')
+  })
+
+  test('a day without business hours shows no grid', async ({ page }) => {
+    await setup(page)
+    await openAvailability(page, { grid: [], open: false })
+    await expect(page.getByText('Sem expediente neste dia.', { exact: false })).toBeVisible()
+    await expect(slotButtons(page)).toHaveCount(0)
+  })
+
+  for (const width of [360, 375, 390, 412, 430]) {
+    test('admin availability mobile ' + width + ': grid, legend and dialogs fit; targets >=44px', async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await setup(page)
+      await openAvailability(page, { grid: [
+        adminSlot('09:00', 'FREE'), adminSlot('09:40', 'APPOINTMENT', { appointmentId: 'a' }),
+        adminSlot('10:20', 'BLOCK', { blockId: 'b', blockReason: 'Dentista' }),
+        adminSlot('11:00', 'FREE'), adminSlot('11:40', 'PAST'), adminSlot('18:20', 'OUTSIDE_HOURS'),
+      ], blocks: [{ id: 'b', startsAtClock: '10:20', endsAtClock: '11:00', reason: 'Dentista' }] })
+
+      await expect(slotButtons(page)).toHaveCount(6)
+      await noOverflow(page); await touchTargets(page)
+      // O diálogo de ação também precisa caber na tela estreita.
+      await page.getByRole('button', { name: '09:00 — Livre' }).click()
+      await expect(page.getByRole('button', { name: 'Bloquear horário' })).toBeVisible()
+      await noOverflow(page)
+    })
+  }
 
   test('Services creates, edits price/duration/description, deactivates and activates using real UI/API client', async ({ page }) => {
     const services = [structuredClone(service30)]
@@ -749,6 +1066,71 @@ const staticPix = {
   requiresManualConfirmation: true,
 }
 
+test('cliente PENDING com Pix: a tela pede pagamento em vez de pedir espera', async ({ page }) => {
+  await setup(page)
+  // É o estado novo: cobrança aberta sem nenhuma decisão da barbearia.
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: payment('PENDING'),
+    whatsappUrl: null,
+    pix: staticPix,
+    paymentHelpUrl: 'https://wa.me/5571988887777?text=ajuda',
+    notifyUrl: null,
+    pixPaidUrl: PAID_URL,
+    paymentReported: false,
+  })
+
+  // "Aguardando aprovação" aqui faria a pessoa guardar o celular — o contrário
+  // do que a tela está pedindo.
+  await expect(page.getByText('Aguardando aprovação')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Falta o pagamento' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Pague via Pix' }).getByText('R$ 35,00')).toBeVisible()
+  // E nunca promete confirmação antes de a barbearia decidir.
+  const text = await page.locator('main').innerText()
+  expect(text).not.toMatch(/agendamento confirmado|horário confirmado/i)
+})
+
+test('cliente PENDING com Pix declarado fala de conferencia, nao de pagamento', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: payment('PENDING'),
+    whatsappUrl: null,
+    pix: null,
+    paymentHelpUrl: 'https://wa.me/5571988887777?text=ajuda',
+    notifyUrl: null,
+    pixPaidUrl: null,
+    paymentReported: true,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Pagamento informado' })).toBeVisible()
+  await expect(page.getByText(/Aguarde a conferência/)).toBeVisible()
+  // O QR sai da tela: convidar a pagar de novo é caminho para pagamento duplo.
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toHaveCount(0)
+})
+
+test('cliente PENDING sem Pix continua aguardando o barbeiro', async ({ page }) => {
+  await setup(page)
+  // Instalação sem pagamento: a espera é mesmo pela barbearia.
+  await openStatus(page, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: null,
+    whatsappUrl: null,
+    pix: null,
+    paymentHelpUrl: null,
+    notifyUrl: null,
+    pixPaidUrl: null,
+    paymentReported: false,
+  })
+
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toHaveCount(0)
+})
+
 const dynamicPix = {
   source: 'DYNAMIC_PROVIDER_PIX',
   copyPaste: BRCODE,
@@ -1008,6 +1390,77 @@ async function openAppointment(page: Page, appointment: unknown) {
   await page.goto('/tests/browser/fixture.html?page=appointment&token=' + APPT_ID)
 }
 
+// ---------------------------------------------------------------------------
+// Pix desde a solicitação: PENDING já cobra, e confirmar passa pelo pagamento
+// ---------------------------------------------------------------------------
+
+test('admin PENDING com cobranca aberta nao oferece aprovar: aponta para Pagamento', async ({ page }) => {
+  await setup(page)
+  await openAppointment(page, adminAppointment('PENDING', adminPayment()))
+
+  // A confirmação acontece junto com o pagamento, numa transação só. Oferecer
+  // "aprovar" aqui bateria no 409 do servidor — ou confirmaria quem não pagou.
+  await expect(page.getByRole('button', { name: 'Confirmar agendamento' })).toHaveCount(0)
+  await expect(page.getByText(/O Pix já está na tela do cliente/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toBeVisible()
+  // Recusar continua disponível.
+  await expect(page.getByRole('button', { name: 'Recusar solicitação' })).toBeVisible()
+})
+
+test('admin PENDING sem cobranca mantem o aprovar direto', async ({ page }) => {
+  await setup(page)
+  // Instalação sem pagamento, ou serviço gratuito: não há Pix a conferir.
+  await openAppointment(page, adminAppointment('PENDING', null))
+
+  await expect(page.getByRole('button', { name: 'Confirmar agendamento' })).toBeVisible()
+  await expect(page.getByText(/Solicitação feita pelo WhatsApp/)).toBeVisible()
+})
+
+test('admin: recusar com Pix declarado exige modal e avisa que nao devolve dinheiro', async ({ page }) => {
+  await setup(page)
+  const bodies: any[] = []
+  await page.route('**/api/admin/requests/' + APPT_ID + '/decide', route => {
+    bodies.push(route.request().postDataJSON())
+    return ok(route, { appointment: adminAppointment('REJECTED', adminPayment({ status: 'CANCELED', canConfirmManually: false })) })
+  })
+  await openAppointment(page, adminAppointment('PENDING', adminPayment({
+    reportedAt: '2026-09-24T14:50:00Z',
+    reviewExpiresAt: '2026-09-25T14:50:00Z',
+  })))
+
+  await page.getByRole('button', { name: 'Recusar solicitação' }).click()
+  // Um clique não recusa: há dinheiro de outra pessoa em jogo.
+  expect(bodies).toEqual([])
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText(/informou ter pagado R\$ 40,00/)).toBeVisible()
+  await expect(dialog.getByText(/não devolve/)).toBeVisible()
+
+  // Voltar não decide nada.
+  await dialog.getByRole('button', { name: 'Voltar' }).click()
+  expect(bodies).toEqual([])
+
+  await page.getByRole('button', { name: 'Recusar solicitação' }).click()
+  await page.getByRole('button', { name: 'Recusar mesmo assim' }).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  // O reconhecimento explícito viaja junto — é o que o servidor exige.
+  expect(bodies[0]).toEqual({ decision: 'REJECTED', acknowledgePaidReport: true })
+})
+
+test('admin: recusar sem pagamento declarado nao abre modal', async ({ page }) => {
+  await setup(page)
+  const bodies: any[] = []
+  await page.route('**/api/admin/requests/' + APPT_ID + '/decide', route => {
+    bodies.push(route.request().postDataJSON())
+    return ok(route, { appointment: adminAppointment('REJECTED', null) })
+  })
+  await openAppointment(page, adminAppointment('PENDING', null))
+
+  await page.getByRole('button', { name: 'Recusar solicitação' }).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  // Sem dinheiro em jogo, nada de clique extra — e nada de reconhecimento.
+  expect(bodies[0]).toEqual({ decision: 'REJECTED' })
+})
+
 test('admin AWAITING_PAYMENT: secao Pagamento com metodo, valor, status e referencia', async ({ page }) => {
   await setup(page)
   await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment()))
@@ -1018,7 +1471,7 @@ test('admin AWAITING_PAYMENT: secao Pagamento com metodo, valor, status e refere
   await expect(secao.getByText('R$ 40,00')).toBeVisible()
   await expect(secao.getByText('Aguardando pagamento', { exact: true })).toBeVisible()
   await expect(secao.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Pagamento não identificado' })).toBeVisible()
   await expect(page.getByText(/Confira o recebimento no extrato/)).toBeVisible()
 
@@ -1038,7 +1491,7 @@ test('admin: confirmar exige modal, nao um clique so', async ({ page }) => {
   })
   await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment()))
 
-  await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+  await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
   // Nada foi enviado ainda: o modal esta no caminho.
   expect(posted).toBe(0)
 
@@ -1060,12 +1513,12 @@ test('admin: confirmar exige modal, nao um clique so', async ({ page }) => {
   expect(posted).toBe(0)
 
   // Confirmar envia uma vez e mostra o resultado.
-  await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+  await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Confirmar pagamento' }).click()
   await expect(page.getByText('Pagamento confirmado. Agendamento confirmado.')).toBeVisible()
   expect(posted).toBe(1)
   // O botao sai da tela: nao ha mais o que confirmar.
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
   await expect(page.getByText('Pagamento confirmado.', { exact: true })).toBeVisible()
 })
 
@@ -1077,7 +1530,7 @@ test('admin: o corpo enviado leva somente a decisao', async ({ page }) => {
     return ok(route, { appointment: adminAppointment('CONFIRMED', adminPayment({ status: 'PAID', canConfirmManually: false })) })
   })
   await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment()))
-  await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+  await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Confirmar pagamento' }).click()
   await expect(page.getByText('Pagamento confirmado. Agendamento confirmado.')).toBeVisible()
 
@@ -1096,7 +1549,7 @@ test('admin: duplo clique envia uma requisicao so', async ({ page }) => {
     return ok(route, { appointment: adminAppointment('CONFIRMED', adminPayment({ status: 'PAID', canConfirmManually: false })) })
   })
   await openAppointment(page, adminAppointment('AWAITING_PAYMENT', adminPayment()))
-  await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+  await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
 
   const confirm = page.getByRole('dialog').getByRole('button', { name: 'Confirmar pagamento' })
   await confirm.click()
@@ -1125,14 +1578,14 @@ test('admin: 409 de outra sessao aparece como aviso, nao erro generico', async (
   })
   await page.goto('/tests/browser/fixture.html?page=appointment&token=' + APPT_ID)
 
-  await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+  await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Confirmar pagamento' }).click()
 
   // A mensagem do servidor aparece como status, e o estado se atualiza.
   await expect(page.getByRole('status').filter({ hasText: 'Este pagamento já foi confirmado.' })).toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
 })
 
 test('admin: marcar como nao identificado nao cancela o agendamento', async ({ page }) => {
@@ -1160,7 +1613,7 @@ test('admin CONFIRMED: sem botao de confirmar', async ({ page }) => {
   await openAppointment(page, adminAppointment('CONFIRMED', adminPayment({ status: 'PAID', canConfirmManually: false, paidAt: '2026-09-24T15:05:00Z' })))
   await expect(page.getByRole('heading', { name: 'Pagamento' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Pagamento' }).getByText('Pago', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Pagamento não identificado' })).toHaveCount(0)
 })
 
@@ -1168,7 +1621,7 @@ test('admin PENDING: sem cobranca, sem secao de pagamento', async ({ page }) => 
   await setup(page)
   await openAppointment(page, adminAppointment('PENDING', null, { reference: null }))
   await expect(page.getByRole('heading', { name: 'Pagamento' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
 })
 
 test('admin prazo vencido: botao desaparece e orienta tratamento manual', async ({ page }) => {
@@ -1179,7 +1632,7 @@ test('admin prazo vencido: botao desaparece e orienta tratamento manual', async 
   await expect(page.getByRole('heading', { name: 'Pagamento' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Pagamento' }).getByText('Prazo vencido', { exact: true })).toBeVisible()
   // O botao normal sai da tela.
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Pagamento não identificado' })).toHaveCount(0)
   // E o painel explica o risco de confirmar um horario que voltou a ficar livre.
   await expect(page.getByText(/trate o caso manualmente com o cliente/)).toBeVisible()
@@ -1191,7 +1644,7 @@ test('admin cobranca de provedor: confirmacao manual nao e oferecida', async ({ 
     method: 'PROVIDER', canConfirmManually: false,
   })))
   await expect(page.getByRole('region', { name: 'Pagamento' }).getByText('Provedor', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
   await expect(page.getByText(/confirmação chega automaticamente pelo provedor/)).toBeVisible()
 })
 
@@ -1228,7 +1681,7 @@ for (const width of [360, 375, 390, 412, 430]) {
     await touchTargets(page)
 
     // E com o modal aberto.
-    await page.getByRole('button', { name: 'Confirmar recebimento do Pix' }).click()
+    await page.getByRole('button', { name: 'Confirmar pagamento e agendamento' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const small = await page.getByRole('dialog').locator('button').evaluateAll(nodes =>
@@ -1364,6 +1817,71 @@ async function submitRequest(page: Page, notifyUrl: string | null) {
   await page.getByRole('button', { name: 'Continuar', exact: true }).click()
   await page.getByRole('button', { name: 'Solicitar agendamento', exact: true }).click()
 }
+
+test('solicitacao enviada: o Pix aparece na propria tela de sucesso', async ({ page }) => {
+  await setup(page)
+  // A tela de sucesso busca a solicitação no MESMO endpoint da tela de
+  // acompanhamento — uma fonte só para QR, chave, valor, recebedor e prazo.
+  await page.route('**/api/booking/requests/' + TOKEN, route => ok(route, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: payment('PENDING'),
+    whatsappUrl: null,
+    pix: staticPix,
+    paymentHelpUrl: null,
+    notifyUrl: null,
+    pixPaidUrl: PAID_URL,
+    paymentReported: false,
+  }))
+  await submitRequest(page, null)
+
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+  // Pagar não espera aprovação: o QR, a chave e o valor estão aqui.
+  const secao = page.getByRole('region', { name: 'Pague via Pix' })
+  await expect(secao).toBeVisible()
+  await expect(secao.getByText('R$ 35,00')).toBeVisible()
+  await expect(secao.getByText('5f79…8c21')).toBeVisible()
+  await expect(page.getByText(/Você já pode pagar/)).toBeVisible()
+  // E segue sem prometer confirmação.
+  await expect(page.getByText('Ainda não está confirmado')).toBeVisible()
+  const text = await page.locator('main').innerText()
+  expect(text).not.toMatch(/assim que a barbearia aprovar/i)
+})
+
+test('solicitacao enviada sem cobranca nao inventa bloco de Pix', async ({ page }) => {
+  await setup(page)
+  // Instalação sem pagamento: a tela de sucesso não pode mostrar QR nenhum.
+  await page.route('**/api/booking/requests/' + TOKEN, route => ok(route, {
+    appointment: statusAppointment('PENDING'),
+    reference: 'EC-7F3K2Q',
+    payment: null,
+    whatsappUrl: null,
+    pix: null,
+    paymentHelpUrl: null,
+    notifyUrl: null,
+    pixPaidUrl: null,
+    paymentReported: false,
+  }))
+  await submitRequest(page, null)
+
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Pague via Pix' })).toHaveCount(0)
+  await expect(page.getByText(/Você já pode pagar/)).toHaveCount(0)
+})
+
+test('solicitacao enviada: falha ao buscar o Pix nao estraga a tela', async ({ page }) => {
+  await setup(page)
+  // O pedido já está feito; perder essa consulta não pode apagar a confirmação
+  // de envio nem o caminho de acompanhamento.
+  await page.route('**/api/booking/requests/' + TOKEN, route =>
+    route.fulfill({ status: 500, json: { success: false, error: { code: 'FAILURE', message: 'x' } } }))
+  await submitRequest(page, null)
+
+  await expect(page.getByRole('heading', { name: 'Solicitação enviada!' })).toBeVisible()
+  await expect(page.getByText('Ainda não está confirmado')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Acompanhar meu agendamento' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Pague via Pix' })).toHaveCount(0)
+})
 
 test('solicitacao enviada: CTA de aviso aparece entre o aviso e "Fazer outro"', async ({ page }) => {
   await setup(page)
@@ -1966,7 +2484,7 @@ test('admin: "Pagamento informado" tem apresentacao propria', async ({ page }) =
   await expect(secao.getByText('EC-7F3K2Q', { exact: true })).toBeVisible()
   await expect(secao.getByText('Prazo para conferir', { exact: true })).toBeVisible()
   await expect(page.getByText(/O cliente informou que pagou/)).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Pagamento não localizado' })).toBeVisible()
 })
 
@@ -1990,7 +2508,7 @@ test('admin: conferencia vencida sem decisao grita na tela', async ({ page }) =>
   await expect(page.getByText(/prazo de conferência venceu sem decisão/)).toBeVisible()
   await expect(page.getByText(/Verifique o extrato/)).toBeVisible()
   // Nao oferece confirmar num clique: o horario ja voltou para a agenda.
-  await expect(page.getByRole('button', { name: 'Confirmar recebimento do Pix' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Confirmar pagamento e agendamento' })).toHaveCount(0)
 })
 
 test('agenda admin: distingue "a conferir" de "informado sem conferencia"', async ({ page }) => {
@@ -2058,4 +2576,212 @@ test('audit: POST aceito e GET indisponivel preservam declaracao e fallback mesm
   await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toHaveCount(0)
   await expect(page.getByText(/Não conseguimos gerar o pagamento/)).toHaveCount(0)
   await expect(page.getByText(/Agora realize o pagamento/)).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Sincronização de status na página pública
+// ---------------------------------------------------------------------------
+
+/**
+ * Serve respostas em sequência: a primeira consulta devolve o primeiro item, a
+ * seguinte o segundo, e assim por diante — a última se repete.
+ *
+ * É como se o ADMIN aprovasse entre duas consultas do cliente.
+ */
+async function serveSequence(page: Page, states: unknown[]) {
+  let call = 0
+  const seen: number[] = []
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().url().includes('payment-reported')) return route.fallback()
+    const index = Math.min(call, states.length - 1)
+    call += 1
+    seen.push(call)
+    return ok(route, states[index])
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), TOKEN)
+  return { count: () => call }
+}
+
+const pendingState = {
+  appointment: statusAppointment('PENDING'),
+  reference: 'EC-7F3K2Q',
+  payment: null,
+  whatsappUrl: null,
+  pix: null,
+  paymentHelpUrl: null,
+  notifyUrl: 'https://wa.me/5571988887777?text=avisar',
+  pixPaidUrl: null,
+  paymentReported: false,
+}
+
+const awaitingState = {
+  appointment: statusAppointment('AWAITING_PAYMENT'),
+  reference: 'EC-7F3K2Q',
+  payment: payment('PENDING'),
+  whatsappUrl: null,
+  pix: staticPix,
+  paymentHelpUrl: 'https://wa.me/5571988887777?text=ajuda',
+  notifyUrl: null,
+  pixPaidUrl: 'https://wa.me/5571988887777?text=paguei',
+  paymentReported: false,
+}
+
+const confirmedState = {
+  appointment: statusAppointment('CONFIRMED'),
+  reference: 'EC-7F3K2Q',
+  payment: { ...payment('PAID'), expiresInSeconds: 0 },
+  whatsappUrl: 'https://wa.me/5571988887777?text=confirmado',
+  pix: null,
+  paymentHelpUrl: null,
+  notifyUrl: null,
+  pixPaidUrl: null,
+  paymentReported: false,
+}
+
+test('sync: botao Atualizar traz o estado novo sem recarregar a pagina', async ({ page }) => {
+  await setup(page)
+  await serveSequence(page, [pendingState, awaitingState])
+  await open(page, 'status')
+
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+
+  // Marca a instância da página: se ela recarregar, a marca desaparece.
+  await page.evaluate(() => { (window as any).__naoRecarregou = true })
+
+  await page.getByRole('button', { name: 'Atualizar' }).click()
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  expect(await page.evaluate(() => (window as any).__naoRecarregou)).toBe(true)
+})
+
+test('sync: polling detecta PENDING -> AWAITING_PAYMENT sozinho', async ({ page }) => {
+  await setup(page)
+  // Relógio controlado: avançar o tempo dispara o intervalo sem esperar 15s.
+  await page.clock.install({ time: new Date('2026-09-24T15:00:00Z') })
+  await serveSequence(page, [pendingState, awaitingState])
+  await open(page, 'status')
+
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+  await page.clock.fastForward(16_000)
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'QR Code para pagamento via Pix' })).toBeVisible()
+})
+
+test('sync: voltar para a aba atualiza imediatamente', async ({ page }) => {
+  await setup(page)
+  await page.clock.install({ time: new Date('2026-09-24T15:00:00Z') })
+  const seq = await serveSequence(page, [pendingState, awaitingState])
+  await open(page, 'status')
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toBeVisible()
+  const before = seq.count()
+
+  // A aba vai para segundo plano e volta — sem avançar o relógio, então o
+  // intervalo NÃO é o que traz o estado novo.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+  expect(seq.count()).toBeGreaterThan(before)
+})
+
+test('sync: polling para em estado terminal', async ({ page }) => {
+  await setup(page)
+  await page.clock.install({ time: new Date('2026-09-24T15:00:00Z') })
+  const seq = await serveSequence(page, [confirmedState])
+  await open(page, 'status')
+  await expect(page.getByRole('heading', { name: 'Agendamento confirmado!' })).toBeVisible()
+  const after = seq.count()
+
+  // Dois minutos de relógio: nenhuma consulta nova em estado terminal.
+  await page.clock.fastForward(120_000)
+  expect(seq.count()).toBe(after)
+  // E não há botão Atualizar: não há o que esperar.
+  await expect(page.getByRole('button', { name: 'Atualizar' })).toHaveCount(0)
+})
+
+test('sync: falha de rede mantem o ultimo estado conhecido', async ({ page }) => {
+  await setup(page)
+  let call = 0
+  await page.route('**/api/booking/requests/**', route => {
+    if (route.request().url().includes('payment-reported')) return route.fallback()
+    call += 1
+    // Primeira consulta ok; as seguintes falham.
+    if (call === 1) return ok(route, awaitingState)
+    return route.fulfill({ status: 500, json: { success: false, error: { code: 'INTERNAL_ERROR', message: 'Erro interno.' } } })
+  })
+  await page.addInitScript(t => localStorage.setItem('ec.booking.lastRequest', t as string), TOKEN)
+  await open(page, 'status')
+
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+  await page.getByRole('button', { name: 'Atualizar' }).click()
+
+  // O aviso de falha aparece, mas o estado NÃO regride.
+  await expect(page.getByRole('alert')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Seu horário foi aprovado!' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Aguardando aprovação' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+})
+
+test('sync: nenhum loop de requests', async ({ page }) => {
+  await setup(page)
+  await page.clock.install({ time: new Date('2026-09-24T15:00:00Z') })
+  const seq = await serveSequence(page, [awaitingState])
+  await open(page, 'status')
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+
+  // A contagem regressiva re-renderiza a cada segundo. Isso NÃO pode gerar
+  // consultas: um minuto de relógio permite no máximo 4 ciclos de 15s.
+  const before = seq.count()
+  await page.clock.fastForward(60_000)
+  const added = seq.count() - before
+  expect(added).toBeGreaterThan(0)
+  expect(added).toBeLessThanOrEqual(5)
+})
+
+// §11–§14 — titular da chave Pix é separado da marca.
+test('pix: recebedor aparece em linha propria, distinto da marca', async ({ page }) => {
+  await setup(page)
+  // Titular deliberadamente diferente da marca: é o caso do ambiente de teste.
+  await openStatus(page, payingView({ ...staticPix, receiverName: 'Guilherme Santana' }))
+
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  const secao = page.getByRole('region', { name: 'Pague via Pix' })
+  await expect(secao.getByText('Recebedor', { exact: true })).toBeVisible()
+  await expect(secao.getByText('Guilherme Santana', { exact: true })).toBeVisible()
+  // Chave em bloco próprio, com a forma curta.
+  await expect(secao.getByText('Chave Pix', { exact: true })).toBeVisible()
+  await expect(secao.getByText('5f79…8c21')).toBeVisible()
+  // O valor continua visível.
+  await expect(secao.getByText('R$ 35,00')).toBeVisible()
+
+  // A marca NÃO é apresentada como recebedor.
+  const recebedor = await secao.getByText('Recebedor', { exact: true })
+    .locator('..').innerText()
+  expect(recebedor).toContain('Guilherme Santana')
+  expect(recebedor).not.toContain('ErickCorttes')
+})
+
+test('pix: a tela nao afirma validacao bancaria do titular', async ({ page }) => {
+  await setup(page)
+  await openStatus(page, payingView({ ...staticPix, receiverName: 'Guilherme Santana' }))
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+
+  const text = await page.locator('main').innerText()
+  // Nada que sugira conferência de titularidade — o sistema não faz isso.
+  expect(text).not.toMatch(/verificad|validad|conferid[oa] pelo banco|titular confirmado/i)
+})
+
+test('pix: sem recebedor configurado a linha nao aparece', async ({ page }) => {
+  await setup(page)
+  // Pix dinâmico não expõe titular: a cobrança é do provedor.
+  await openStatus(page, payingView(dynamicPix, { pixPaidUrl: null }))
+  await expect(page.getByRole('heading', { name: 'Pague via Pix' })).toBeVisible()
+  await expect(page.getByText('Recebedor', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Chave Pix', { exact: true })).toHaveCount(0)
 })

@@ -282,3 +282,139 @@ export function windowsFromBusinessHours(day: {
 
   return windows
 }
+
+// ---------------------------------------------------------------------------
+// Grade completa — inclui o que NÃO está disponível
+// ---------------------------------------------------------------------------
+
+/**
+ * Por que um horário da grade não pode ser escolhido.
+ *
+ * O público nunca vê isto: a API pública entrega apenas `available`. O motivo
+ * existe para a barbearia, que precisa distinguir "já tem cliente" de "eu
+ * bloqueei" — são ações diferentes, e só a segunda pode ser desfeita por aqui.
+ */
+export type SlotUnavailableReason = "APPOINTMENT" | "BLOCK" | "OUTSIDE_HOURS" | "PAST"
+
+export interface SlotGridEntry {
+  startMinute: number
+  available: boolean
+  /** `null` quando disponível. */
+  reason: SlotUnavailableReason | null
+}
+
+/** Período ocupado, com a origem — é ela que vira o motivo. */
+export interface TaggedBusyInterval extends BusyInterval {
+  kind: "APPOINTMENT" | "BLOCK"
+}
+
+export interface ComputeGridInput extends Omit<ComputeSlotsInput, "busy" | "maxOptions"> {
+  busy: TaggedBusyInterval[]
+}
+
+/**
+ * Grade do dia inteiro, cada início marcado como disponível ou não.
+ *
+ * Paralela a `computeSlotStarts` de propósito, e NÃO a substitui: aquela decide
+ * o que pode ser reservado e é o caminho que a criação de agendamento valida.
+ * Misturar as duas arriscaria fazer um horário indisponível virar reservável —
+ * exatamente o defeito que nenhuma tela bonita compensa. Aqui só se DESCREVE.
+ *
+ * A grade inclui os inícios cujo atendimento não caberia na janela (o 18:40 de
+ * um corte de 40 min que fecha às 19:00). Eles aparecem cinzas em vez de
+ * desaparecer: um buraco silencioso na grade faz a pessoa achar que a página
+ * quebrou.
+ */
+export function computeSlotGrid(input: ComputeGridInput): SlotGridEntry[] {
+  const {
+    windows,
+    busy,
+    durationMinutes,
+    slotIntervalMinutes,
+    bufferBeforeMinutes = 0,
+    bufferAfterMinutes = 0,
+    earliestStartMinute = Number.NEGATIVE_INFINITY,
+    adaptive = false,
+  } = input
+
+  const reservedMinutes = input.reservedMinutes ?? durationMinutes
+
+  if (
+    !Number.isFinite(durationMinutes) || durationMinutes <= 0 ||
+    !Number.isFinite(reservedMinutes) || reservedMinutes <= 0 ||
+    !Number.isFinite(slotIntervalMinutes) || slotIntervalMinutes <= 0
+  ) return []
+
+  const ordered = [...windows].sort((a, b) => a.startMinute - b.startMinute)
+  const entries = new Map<number, SlotGridEntry>()
+
+  for (const window of ordered) {
+    const candidates: number[] = []
+    // Percorre a janela inteira: `start < endMinute`, sem exigir que o serviço
+    // caiba. Os que não cabem entram como OUTSIDE_HOURS.
+    for (let start = window.startMinute; start < window.endMinute; start += slotIntervalMinutes) {
+      candidates.push(start)
+    }
+
+    if (adaptive) {
+      for (const entry of busy) {
+        const candidate = Math.ceil(entry.endMinute)
+        if (
+          candidate >= window.startMinute &&
+          candidate < window.endMinute &&
+          !candidates.includes(candidate)
+        ) {
+          candidates.push(candidate)
+        }
+      }
+    }
+
+    candidates.sort((a, b) => a - b)
+
+    for (const start of candidates) {
+      // Já decidido por outra janela: o primeiro veredito vale.
+      if (entries.has(start)) continue
+
+      const blocked = blockedRange(start, reservedMinutes, bufferBeforeMinutes, bufferAfterMinutes)
+
+      /**
+       * Ordem dos motivos: do mais absoluto para o mais circunstancial.
+       *
+       * Passado vem primeiro porque nada o reverte. Depois o encaixe no
+       * expediente, que é geometria. Só então os conflitos, que a barbearia pode
+       * mexer. Assim o motivo exibido é sempre o que explica melhor a situação.
+       */
+      let reason: SlotUnavailableReason | null = null
+
+      if (start < earliestStartMinute) {
+        reason = "PAST"
+      } else if (
+        start + durationMinutes > window.endMinute ||
+        blocked.startMinute < window.startMinute ||
+        blocked.endMinute > window.endMinute
+      ) {
+        reason = "OUTSIDE_HOURS"
+      } else {
+        const conflict = busy.find(entry =>
+          overlaps(blocked.startMinute, blocked.endMinute, entry.startMinute, entry.endMinute),
+        )
+        // Agendamento ganha de bloqueio quando os dois cobrem o mesmo horário:
+        // é o que a barbearia NÃO pode liberar por aqui, e é o que ela precisa
+        // ver.
+        if (conflict) {
+          reason = busy.some(
+            entry =>
+              entry.kind === "APPOINTMENT" &&
+              overlaps(blocked.startMinute, blocked.endMinute, entry.startMinute, entry.endMinute),
+          )
+            ? "APPOINTMENT"
+            : "BLOCK"
+        }
+      }
+
+      entries.set(start, { startMinute: start, available: reason === null, reason })
+    }
+  }
+
+  return [...entries.values()].sort((a, b) => a.startMinute - b.startMinute)
+}

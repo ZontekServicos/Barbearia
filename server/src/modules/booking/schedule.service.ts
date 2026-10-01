@@ -1,5 +1,7 @@
 import { prisma } from "../../config/prisma.js"
+import type { Prisma } from "../../generated/prisma/client.js"
 import { AppError, ErrorCodes } from "../../utils/errors.js"
+import { lockKey } from "../../utils/locks.js"
 import {
   addDaysToShopDate,
   clockToMinutes,
@@ -155,6 +157,8 @@ export async function createBlock(input: {
   startsAt: string
   endsAt: string
   reason: string
+  /** Quem bloqueou. A rota passa a sessão; nunca vem do corpo. */
+  createdById?: string
 }): Promise<PublicScheduleBlock> {
   const startsAt = shopWallClockToInstant(input.date, clockToMinutes(input.startsAt))
   const endsAt = shopWallClockToInstant(input.date, clockToMinutes(input.endsAt))
@@ -166,8 +170,17 @@ export async function createBlock(input: {
     )
   }
 
-  const block = await prisma.scheduleBlock.create({
-    data: { startsAt, endsAt, reason: input.reason },
+  const block = await prisma.$transaction(async tx => {
+    await lockKey(tx, `booking-day:${input.date}`)
+    await assertIntervalCanBeBlocked(tx, startsAt, endsAt)
+    return tx.scheduleBlock.create({
+      data: {
+        startsAt,
+        endsAt,
+        reason: input.reason,
+        ...(input.createdById ? { createdById: input.createdById } : {}),
+      },
+    })
   })
 
   return toPublicScheduleBlock(block)
@@ -179,4 +192,69 @@ export async function deleteBlock(id: string): Promise<void> {
     throw AppError.notFound(ErrorCodes.NOT_FOUND, "Bloqueio não encontrado.")
   }
   await prisma.scheduleBlock.delete({ where: { id } })
+}
+
+/**
+ * Bloqueia o DIA INTEIRO.
+ *
+ * Um bloqueio só, cobrindo de meia-noite a meia-noite, em vez de um por horário
+ * da grade: o dia inteiro é uma decisão única ("não atendo amanhã"), e liberar
+ * depois tem de ser um clique — não quinze. Também sobrevive a mudança de
+ * expediente, porque não depende de onde a grade começava quando foi criado.
+ *
+ * NÃO cancela agendamento existente. Um horário já reservado continua reservado:
+ * bloquear a agenda e desmarcar cliente são decisões diferentes, e a segunda
+ * passa pelo cancelamento, que avisa quem ia ser atendido.
+ */
+export async function blockWholeDay(input: {
+  date: string
+  reason: string
+  createdById?: string
+}): Promise<PublicScheduleBlock> {
+  const startsAt = shopWallClockToInstant(input.date, 0)
+  const endsAt = shopWallClockToInstant(addDaysToShopDate(input.date, 1), 0)
+
+  const block = await prisma.$transaction(async tx => {
+    await lockKey(tx, `booking-day:${input.date}`)
+    await assertIntervalCanBeBlocked(tx, startsAt, endsAt)
+    return tx.scheduleBlock.create({
+      data: {
+        startsAt,
+        endsAt,
+        reason: input.reason,
+        ...(input.createdById ? { createdById: input.createdById } : {}),
+      },
+    })
+  })
+  return toPublicScheduleBlock(block)
+}
+
+/**
+ * Rechecked only after taking the same day lock used by appointment creation.
+ * This is the cross-table equivalent of an exclusion constraint: PostgreSQL
+ * cannot express one EXCLUDE over appointments and schedule_blocks directly.
+ */
+async function assertIntervalCanBeBlocked(
+  tx: Prisma.TransactionClient,
+  startsAt: Date,
+  endsAt: Date,
+): Promise<void> {
+  const now = new Date()
+  const appointments = await tx.appointment.count({
+    where: {
+      startsAt: { lt: endsAt },
+      reservedEndsAt: { gt: startsAt },
+      OR: [
+        { status: "CONFIRMED" },
+        { status: "PENDING", pendingExpiresAt: { gt: now } },
+        { status: "AWAITING_PAYMENT", pendingExpiresAt: { gt: now } },
+      ],
+    },
+  })
+  if (appointments > 0) {
+    throw AppError.conflict(
+      ErrorCodes.CONFLICT,
+      "Existe um agendamento ativo neste intervalo. Cancele-o pelo fluxo próprio antes de bloquear.",
+    )
+  }
 }

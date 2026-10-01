@@ -194,18 +194,26 @@ export default function PixPayment({
         </figcaption>
       </figure>
 
+      {/*
+        Recebedor em linha própria.
+
+        É o TITULAR da chave Pix, não a marca. Os dois podem divergir — e durante
+        os testes divergem de propósito —, então juntá-los numa linha só levaria o
+        cliente a achar que está pagando para "ErickCorttes" quando o nome que vai
+        aparecer no aplicativo do banco dele é outro. Ver a divergência ANTES de
+        pagar evita o pagamento abortado por desconfiança.
+      */}
+      {pix.receiverName && (
+        <div className="rounded-lg border border-[var(--border)]/60 px-3 py-2">
+          <p className="text-xs text-[var(--muted-foreground)]">Recebedor</p>
+          <p className="text-sm font-medium text-[var(--foreground)]">{pix.receiverName}</p>
+        </div>
+      )}
+
       {/* Chave só existe no Pix estático da barbearia. */}
       {pix.key && (
         <div className="space-y-2">
-          <p className="text-xs text-[var(--muted-foreground)]">
-            Chave Pix
-            {pix.receiverName && (
-              <>
-                {' · '}
-                <span className="text-[var(--foreground)]">{pix.receiverName}</span>
-              </>
-            )}
-          </p>
+          <p className="text-xs text-[var(--muted-foreground)]">Chave Pix</p>
           <p className="font-mono text-sm break-all rounded-lg bg-black/30 px-3 py-2 text-[var(--foreground)]">
             {pix.keyMasked ?? pix.key}
           </p>
