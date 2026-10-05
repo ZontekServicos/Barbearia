@@ -26,6 +26,17 @@ const REDACTED_KEYS = new Set([
   "jwt_access_secret",
   "database_url",
   "bootstrap_admin_password",
+  /**
+   * Segredo do webhook de pagamento.
+   *
+   * Estava de fora enquanto os outros segredos de ambiente já estavam aqui —
+   * omissão pelo próprio critério desta lista. Nada no código o registra hoje;
+   * a entrada existe para que um log de configuração acrescentado depois não
+   * passe a vazá-lo em silêncio. Com ele, qualquer um consegue forjar uma
+   * notificação de "pagamento recebido".
+   */
+  "payment_webhook_secret",
+  "paymentwebhooksecret",
 ])
 
 function redact(value: unknown, depth = 0): unknown {
