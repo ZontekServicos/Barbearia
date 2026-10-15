@@ -50,6 +50,8 @@ model User {
   actionsPerfomed AdminAuditLog[] @relation("AdminActor")
   actionsReceived AdminAuditLog[] @relation("AdminTarget")
   scheduleBlocks  ScheduleBlock[] @relation("ScheduleBlockAuthor")
+  scheduleOpenings ScheduleOpening[] @relation("ScheduleOpeningAuthor")
+  dateOverrides   ScheduleDateOverride[] @relation("ScheduleDateOverrideAuthor")
 
   @@index([status])
   @@index([role])
@@ -134,6 +136,65 @@ model ScheduleBlock {
   @@index([startsAt, endsAt])
   @@index([createdById])
   @@map("schedule_blocks")
+}
+
+/// Faixa de atendimento ABERTA — disponibilidade POSITIVA.
+///
+/// Contraponto deliberado de `ScheduleBlock`, que é negativa: inverter a
+/// semântica daquela tabela deixaria "bloqueio" significando duas coisas
+/// opostas dependendo do contexto, e nenhuma consulta conseguiria dizer qual.
+///
+/// A agenda é FECHADA POR PADRÃO: sem nenhuma linha aqui, nenhum horário aceita
+/// agendamento. É o oposto do comportamento anterior, em que um dia sem
+/// configuração caía num expediente embutido no código.
+///
+/// Uma linha é semanal (`weekday`) OU de uma data (`date`), nunca as duas — a
+/// migration garante isso com CHECK. Várias linhas por dia dão as múltiplas
+/// faixas: terça 09:00–12:00 e 14:00–18:00 são duas linhas.
+model ScheduleOpening {
+  id          String    @id @default(uuid()) @db.Uuid
+  /// 0 = domingo ... 6 = sábado. Nulo quando a faixa pertence a uma data.
+  weekday     Int?
+  /// Faixa válida só nesta data. Nulo quando a faixa é semanal.
+  date        DateTime? @db.Date
+  /// Minutos desde a meia-noite local da barbearia. Sem fuso, sem timestamp:
+  /// a conversão para instante acontece num ponto só (`utils/time`).
+  startMinute Int       @map("start_minute")
+  endMinute   Int       @map("end_minute")
+  /// Quem abriu. `SetNull` na remoção da conta: a agenda vale mesmo sem autor.
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdBy   User?     @relation("ScheduleOpeningAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([weekday])
+  @@index([date])
+  @@index([createdById])
+  @@map("schedule_openings")
+}
+
+/// Marca que uma DATA tem regra própria, ignorando a semanal.
+///
+/// Existe porque "fechado nesta data" não pode ser representado pela AUSÊNCIA
+/// de faixas: ausência significa "use a regra semanal". Esta linha é o que diz
+/// "esqueça a semana, para este dia vale o que estiver aqui".
+///
+/// Fechado = esta linha existe e NÃO há `ScheduleOpening` com esta data.
+/// Horário especial = esta linha existe e há faixas com esta data.
+/// Derivar o "fechado" em vez de guardar um booleano evita um campo que pode
+/// contradizer as faixas.
+model ScheduleDateOverride {
+  id          String    @id @default(uuid()) @db.Uuid
+  date        DateTime  @unique @db.Date
+  /// Motivo visível só para a barbearia (feriado, viagem). Nunca vai ao cliente.
+  note        String?   @db.VarChar(160)
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdBy   User?     @relation("ScheduleDateOverrideAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([createdById])
+  @@map("schedule_date_overrides")
 }
 
 enum AppointmentStatus {

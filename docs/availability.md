@@ -1,5 +1,88 @@
 # Disponibilidade e bloqueios
 
+## A agenda é fechada por padrão
+
+Antes, um dia sem configuração caía num expediente embutido no código
+(`DEFAULT_WEEK`), e a agenda abria sozinha em dias que a barbearia nunca
+confirmou. Agora só existe horário onde há **abertura explícita**.
+
+Duas tabelas descrevem isso, as duas de disponibilidade **positiva**:
+
+| Tabela | O que guarda |
+| --- | --- |
+| `schedule_openings` | uma faixa aberta: `weekday` (regra semanal) **ou** `date` (exceção), nunca as duas |
+| `schedule_date_overrides` | que uma DATA tem regra própria, ignorando a semana |
+
+Várias linhas por dia dão as múltiplas faixas: terça 09:00–12:00 e 14:00–18:00
+são duas linhas, e o almoço é simplesmente o vão entre elas — não um campo.
+
+`ScheduleBlock` continua sendo disponibilidade **negativa** e não foi invertida.
+"Bloqueio" significando abertura em algum contexto tornaria qualquer consulta
+ambígua.
+
+### Precedência
+
+```
+1. exceção da DATA   (existe linha em schedule_date_overrides)
+2. regra SEMANAL     (faixas com weekday)
+3. fechado
+```
+
+A exceção vence por **existir**, não por ter faixas: uma exceção sem faixas é
+"fechado nesta data". Se a ausência de faixas caísse na regra semanal, fechar
+uma data isolada seria impossível.
+
+Depois da janela aberta, nada mudou: a engine subtrai bloqueios, agendamentos e
+passado, e aplica duração e reserva.
+
+### Fechado é derivado, nunca guardado
+
+Não existe booleano `closed`. Fechado é não ter faixa. Um booleano persistido
+poderia contradizer as linhas — "fechado" com três faixas abertas — e nenhuma
+constraint resolveria isso.
+
+### Garantias no banco
+
+- `CHECK` de escopo: `(weekday IS NULL) <> (date IS NULL)`;
+- `CHECK` de limites: dentro do dia e com fim depois do início;
+- `EXCLUDE` por faixa: sobreposição é **impossível por construção**, o que
+  também resolve dois administradores salvando no mesmo instante.
+
+A `EXCLUDE` usa um eixo inteiro com uma faixa de 1440 minutos por dia
+(`weekday * 1440 + minuto`) em vez de `weekday WITH =`. A segunda forma exigiria
+a extensão `btree_gist`, e nenhuma migration deste projeto cria extensão —
+introduzir essa dependência faria a migration falhar justamente no ambiente
+gerenciado, onde o papel pode não ter permissão.
+
+### Alterar disponibilidade nunca cancela agendamento
+
+Fechar uma faixa que contém agendamento é **permitido** e não toca em ninguém: a
+resposta devolve `appointmentsOutside` para a tela avisar quantos ficaram fora.
+Só agendamento NOVO é proibido.
+
+A assimetria é intencional:
+
+- fechar **depois** de a reserva existir → a reserva continua valendo;
+- reservar **depois** de fechar → recusado.
+
+Quem garante a segunda metade é uma reconferência da janela **dentro** da
+transação de criação, sob `pg_advisory_xact_lock_shared('schedule-rules')`. A
+alteração de expediente toma o mesmo lock em modo exclusivo. Reservas não
+esperam umas às outras (é o caminho quente), mas esperam uma alteração em curso
+— e, enquanto ela grava, nenhuma reserva nova entra.
+
+### `business_hours` ficou para trás
+
+A tabela continua no banco, sem leitor, preservada por migration aditiva —
+apagá-la num deploy reversível destruiria configuração real sem volta. As rotas
+`GET/PUT /admin/business-hours` e o editor em Configurações foram removidos:
+manter um editor que grava onde ninguém lê faria o administrador salvar o
+expediente e a agenda não mudar.
+
+O `GET /booking/business-hours` público continua existindo e passou a **derivar**
+das aberturas, para a vitrine não anunciar "Ter 09:00–19:00" com a agenda
+fechada.
+
 ## Duas grades, uma verdade
 
 O mesmo dia é descrito para dois públicos, e a diferença é deliberada.

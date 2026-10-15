@@ -112,6 +112,24 @@ async function request(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/**
+ * Abre a semana para os testes.
+ *
+ * A agenda nasce FECHADA desde a abertura manual, entao o expediente de teste
+ * precisa ser explicito — antes ele vinha de um padrao embutido no codigo, e
+ * era esse padrao que fazia a terca estar aberta sem ninguem pedir.
+ */
+async function openWeek(
+  startMinute = 9 * 60,
+  endMinute = 19 * 60,
+  weekdays = [0, 1, 2, 3, 4, 5, 6],
+) {
+  await prisma.scheduleOpening.deleteMany({ where: { weekday: { not: null } } })
+  await prisma.scheduleOpening.createMany({
+    data: weekdays.map(weekday => ({ weekday, startMinute, endMinute })),
+  })
+}
+
 async function cleanup() {
   // Quotas e handles são DURÁVEIS: vivem no banco para valer entre réplicas.
   // Sem limpá-los, um teste que esgota o orçamento por IP faz todos os
@@ -123,6 +141,8 @@ async function cleanup() {
   await prisma.scheduleBlock.deleteMany()
   await prisma.service.deleteMany()
   await prisma.businessHours.deleteMany()
+  await prisma.scheduleOpening.deleteMany()
+  await prisma.scheduleDateOverride.deleteMany()
   await prisma.refreshToken.deleteMany()
   await prisma.user.deleteMany()
 }
@@ -150,6 +170,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
 
   beforeEach(async () => {
     await cleanup()
+    await openWeek()
     for (const limiter of [
       limits.globalRateLimit,
       limits.publicBookingRateLimit,
@@ -746,7 +767,7 @@ describe("Agendamento público sem login — PostgreSQL real", { skip: !enabled 
   it("display cap never rejects a valid unlisted start; frozen durations survive service edits", async () => {
     const service=await makeService()
     const date=nextTuesday(), zero=new Date(date+"T00:00:00-03:00")
-    await prisma.businessHours.create({data:{weekday:2,closed:false,openMinute:0,closeMinute:1439}})
+    await openWeek(0, 1439, [2])
     const owner=await prisma.user.create({data:{phone:phone()}})
     for(let minute=50;minute<1300;minute+=160)await prisma.appointment.create({data:{userId:owner.id,serviceId:service.id,startsAt:new Date(+zero+minute*60000),endsAt:new Date(+zero+(minute+1)*60000),reservedEndsAt:new Date(+zero+(minute+1)*60000),serviceName:"Historical short",servicePriceCents:100}})
     const full=await availability.listBookableStartMinutes(date,service.id)

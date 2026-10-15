@@ -70,7 +70,8 @@ async function setup(page: Page) {
   })
   await page.route('**/api/booking/policy', route => ok(route, { requiresApproval: true, baseSlotMinutes: 40, pendingTtlMinutes: 120, minimumAdvanceMinutes: 60 }))
   await page.route('**/api/booking/services', route => ok(route, { services: [service30, service50] }))
-  await page.route('**/api/booking/business-hours', route => ok(route, { days: Array.from({ length: 7 }, (_, weekday) => ({ weekday, closed: false, opensAt: '09:00', closesAt: '20:00', breakStartsAt: '12:00', breakEndsAt: '14:00' })) }))
+  // Expediente no formato novo: faixas, e o almoço é o vão entre duas delas.
+  await page.route('**/api/booking/business-hours', route => ok(route, { days: Array.from({ length: 7 }, (_, weekday) => ({ weekday, closed: false, ranges: [{ opensAt: '09:00', closesAt: '12:00' }, { opensAt: '14:00', closesAt: '20:00' }] })) }))
 }
 async function open(page: Page, screen: string) {
   await page.goto('/tests/browser/fixture.html?page=' + screen)
@@ -348,6 +349,275 @@ test.describe('current booking components in Chromium', () => {
   }
 
   // -------------------------------------------------------------------------
+  // Abertura da agenda
+  // -------------------------------------------------------------------------
+
+  type Write = { method: string; path: string; data: any }
+  /** Semana inteira fechada — é o estado de uma instalação recém-migrada. */
+  const emptyWeek = () =>
+    Array.from({ length: 7 }, (_unused, weekday) => ({ weekday, closed: true, ranges: [] }))
+  const weekWith = (weekday: number, ranges: Array<[string, string]>) =>
+    emptyWeek().map(day =>
+      day.weekday === weekday
+        ? {
+            weekday,
+            closed: ranges.length === 0,
+            ranges: ranges.map(([opensAt, closesAt]) => ({ opensAt, closesAt })),
+          }
+        : day,
+    )
+
+  async function openOpenings(page: Page, options: {
+    /** Estado INICIAL (resposta do GET). Por padrão a semana toda fechada. */
+    days?: ReturnType<typeof emptyWeek>
+    /** Resposta do PUT/copy, quando precisa diferir do inicial. */
+    savedDays?: ReturnType<typeof emptyWeek>
+    overrides?: Array<{ date: string; ranges: Array<{ opensAt: string; closesAt: string }>; note: string | null }>
+    appointmentsOutside?: number
+  } = {}) {
+    const writes: Write[] = []
+    await page.route('**/api/admin/openings/overrides**', route => {
+      const request = route.request()
+      const method = request.method()
+      const path = new URL(request.url()).pathname
+      if (method === 'GET') return ok(route, { overrides: options.overrides ?? [] })
+      writes.push({ method, path, data: method === 'DELETE' ? null : request.postDataJSON() })
+      if (method === 'DELETE') return ok(route, { removed: true })
+      return ok(route, {
+        override: { date: '2026-10-24', ranges: [], note: null },
+        appointmentsOutside: options.appointmentsOutside ?? 0,
+      })
+    })
+    await page.route('**/api/admin/openings/copy', route => {
+      writes.push({ method: 'POST', path: '/api/admin/openings/copy', data: route.request().postDataJSON() })
+      return ok(route, { days: options.savedDays ?? options.days ?? emptyWeek() })
+    })
+    await page.route("**/api/admin/openings/*", route => {
+      const request = route.request()
+      if (request.method() !== 'PUT') return route.fallback()
+      writes.push({ method: 'PUT', path: new URL(request.url()).pathname, data: request.postDataJSON() })
+      return ok(route, {
+        days: options.savedDays ?? options.days ?? emptyWeek(),
+        appointmentsOutside: options.appointmentsOutside ?? 0,
+      })
+    })
+    await page.route('**/api/admin/openings', route => ok(route, { days: options.days ?? emptyWeek() }))
+    await open(page, 'openings')
+    await expect(page.getByRole('heading', { name: 'Abertura da agenda' })).toBeVisible()
+    return writes
+  }
+
+  test('abertura: os sete dias aparecem e começam fechados', async ({ page }) => {
+    await setup(page)
+    await openOpenings(page)
+    for (const label of ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']) {
+      const day = page.getByRole('button', { name: new RegExp('^' + label) })
+      await expect(day).toBeVisible()
+      await expect(day).toContainText('Fechado')
+    }
+    await expect(page.getByText(/A agenda começa fechada/)).toBeVisible()
+  })
+
+  test('abertura: criar um intervalo e salvar envia a lista do dia', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page, { savedDays: weekWith(2, [['09:00', '12:00']]) })
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await expect(page.getByRole('button', { name: 'Abrir o dia' })).toBeVisible()
+    await page.getByRole('button', { name: 'Abrir o dia' }).click()
+    // Abrir já propõe uma faixa; ajusto o fim.
+    await page.getByLabel('Fim').fill('12:00')
+    await page.getByRole('button', { name: 'Salvar' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.path).toBe('/api/admin/openings/2')
+    expect(writes[0]!.data).toEqual({ ranges: [{ opensAt: '09:00', closesAt: '12:00' }] })
+    await expect(page.getByRole('status')).toContainText('Terça salvo')
+  })
+
+  test('abertura: duas faixas no mesmo dia são enviadas juntas', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page, {
+      savedDays: weekWith(2, [['09:00', '12:00'], ['14:00', '18:00']]),
+    })
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await page.getByRole('button', { name: 'Abrir o dia' }).click()
+    await page.getByLabel('Fim').fill('12:00')
+    await page.getByRole('button', { name: 'Adicionar intervalo' }).click()
+    const starts = page.getByLabel('Início')
+    const ends = page.getByLabel('Fim')
+    await starts.nth(1).fill('14:00')
+    await ends.nth(1).fill('18:00')
+    await page.getByRole('button', { name: 'Salvar' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.data).toEqual({
+      ranges: [
+        { opensAt: '09:00', closesAt: '12:00' },
+        { opensAt: '14:00', closesAt: '18:00' },
+      ],
+    })
+  })
+
+  test('abertura: remover intervalo e fechar o dia envia lista vazia', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page, { days: emptyWeek() })
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await page.getByRole('button', { name: 'Abrir o dia' }).click()
+    await expect(page.getByLabel('Início')).toBeVisible()
+    await page.getByRole('button', { name: /^Remover intervalo/ }).click()
+    await expect(page.getByLabel('Início')).toHaveCount(0)
+    await expect(page.getByText(/não aceita agendamento/)).toBeVisible()
+    await page.getByRole('button', { name: 'Salvar' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.data).toEqual({ ranges: [] })
+  })
+
+  test('abertura: faixa invertida e sobreposta não chegam ao servidor', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page)
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await page.getByRole('button', { name: 'Abrir o dia' }).click()
+    await page.getByLabel('Início').fill('12:00')
+    await page.getByLabel('Fim').fill('09:00')
+    await page.getByRole('button', { name: 'Salvar' }).click()
+    await expect(page.getByRole('alert')).toContainText('deve ser depois')
+    expect(writes).toEqual([])
+
+    // Agora sobreposição.
+    await page.getByLabel('Início').fill('09:00')
+    await page.getByLabel('Fim').fill('13:00')
+    await page.getByRole('button', { name: 'Adicionar intervalo' }).click()
+    await page.getByLabel('Início').nth(1).fill('12:00')
+    await page.getByLabel('Fim').nth(1).fill('18:00')
+    await page.getByRole('button', { name: 'Salvar' }).click()
+    await expect(page.getByRole('alert')).toContainText('sobrep')
+    expect(writes).toEqual([])
+  })
+
+  test('abertura: aviso quando há agendamento dentro do período fechado', async ({ page }) => {
+    await setup(page)
+    await openOpenings(page, { appointmentsOutside: 3 })
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await page.getByRole('button', { name: 'Abrir o dia' }).click()
+    await page.getByRole('button', { name: 'Salvar' }).click()
+
+    const status = page.getByRole('status')
+    await expect(status).toContainText('3 agendamento')
+    // A promessa que importa: nada é cancelado.
+    await expect(status).toContainText('não serão cancelados')
+  })
+
+  test('abertura: copiar horários avisa que substitui e envia os destinos', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page, { days: weekWith(2, [['09:00', '12:00']]) })
+
+    await page.getByRole('button', { name: /^Terça/ }).click()
+    await page.getByRole('button', { name: /Copiar horários para/ }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByText(/substituídos/)).toBeVisible()
+    await expect(dialog.getByText(/não é cancelado/)).toBeVisible()
+    // Sem destino escolhido não dá para confirmar.
+    await expect(dialog.getByRole('button', { name: 'Substituir e copiar' })).toBeDisabled()
+
+    for (const label of ['Quarta', 'Quinta']) {
+      await dialog.getByRole('checkbox').nth(['Segunda', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].indexOf(label)).check()
+    }
+    await dialog.getByRole('button', { name: 'Substituir e copiar' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.path).toBe('/api/admin/openings/copy')
+    expect(writes[0]!.data).toEqual({ from: 2, to: [3, 4] })
+  })
+
+  test('abertura: exceção fechando uma data envia ranges vazio', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page)
+
+    await page.getByRole('button', { name: /Nova data/ }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByLabel('Data').fill('2026-10-17')
+    await dialog.getByRole('radio', { name: 'Fechado' }).check()
+    await dialog.getByLabel('Motivo (opcional)').fill('Feriado')
+    await dialog.getByRole('button', { name: 'Salvar exceção' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.data).toEqual({ date: '2026-10-17', ranges: [], note: 'Feriado' })
+  })
+
+  test('abertura: exceção com horário especial envia as faixas da data', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page)
+
+    await page.getByRole('button', { name: /Nova data/ }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByLabel('Data').fill('2026-10-24')
+    await dialog.getByRole('radio', { name: 'Horário especial' }).check()
+    await dialog.getByLabel('Início').fill('09:00')
+    await dialog.getByLabel('Fim').fill('13:00')
+    await dialog.getByRole('button', { name: 'Salvar exceção' }).click()
+
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.data).toEqual({ date: '2026-10-24', ranges: [{ opensAt: '09:00', closesAt: '13:00' }] })
+  })
+
+  test('abertura: lista exceções e remover devolve a data à regra da semana', async ({ page }) => {
+    await setup(page)
+    const writes = await openOpenings(page, {
+      overrides: [
+        { date: '2026-10-17', ranges: [], note: 'Feriado' },
+        { date: '2026-10-24', ranges: [{ opensAt: '09:00', closesAt: '13:00' }], note: null },
+      ],
+    })
+
+    await expect(page.getByText('17 de out')).toBeVisible()
+    await expect(page.getByText('Feriado', { exact: true })).toBeVisible()
+    await expect(page.getByText('09:00–13:00')).toBeVisible()
+
+    await page.getByRole('button', { name: /Remover exceção de 17 de out/ }).click()
+    await expect.poll(() => writes.length).toBe(1)
+    expect(writes[0]!.method).toBe('DELETE')
+    expect(writes[0]!.path).toBe('/api/admin/openings/overrides/2026-10-17')
+    await expect(page.getByRole('status')).toContainText('volta à regra da semana')
+  })
+
+  test('abertura: estados de carregamento e erro', async ({ page }) => {
+    await setup(page)
+    await page.route('**/api/admin/openings/overrides**', route => ok(route, { overrides: [] }))
+    await page.route('**/api/admin/openings', route =>
+      route.fulfill({ status: 500, json: { success: false, error: { code: 'FAILURE', message: 'Falha ao ler a agenda' } } }))
+    await open(page, 'openings')
+    await expect(page.getByRole('alert')).toContainText('Falha ao ler a agenda')
+    await expect(page.getByRole('button', { name: 'Tentar novamente' })).toBeVisible()
+  })
+
+  for (const width of [360, 375, 390, 412, 430]) {
+    test('abertura mobile ' + width + ': cards por dia cabem; alvos >=44px', async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await setup(page)
+      await openOpenings(page, {
+        savedDays: weekWith(2, [['09:00', '12:00'], ['14:00', '18:00']]),
+        overrides: [{ date: '2026-10-17', ranges: [], note: 'Feriado' }],
+      })
+
+      await noOverflow(page); await touchTargets(page)
+      // Dia expandido com duas faixas: é o caso que uma tabela estouraria.
+      await page.getByRole('button', { name: /^Terça/ }).click()
+      await expect(page.getByRole('button', { name: 'Salvar' })).toBeVisible()
+      await noOverflow(page); await touchTargets(page)
+      // E os diálogos também precisam caber.
+      await page.getByRole('button', { name: /Copiar horários para/ }).click()
+      await expect(page.getByRole('dialog')).toBeVisible()
+      await noOverflow(page)
+    })
+  }
+
+  // -------------------------------------------------------------------------
   // Grade administrativa: o motivo, e a ação que ele permite
   // -------------------------------------------------------------------------
 
@@ -370,7 +640,6 @@ test.describe('current booking components in Chromium', () => {
     }
   }
 
-  type Write = { method: string; path: string; data: any }
   async function openAvailability(page: Page, options: {
     grid: Array<ReturnType<typeof adminSlot>>
     blocks?: Array<{ id: string; startsAtClock: string; endsAtClock: string; reason: string }>
@@ -378,6 +647,10 @@ test.describe('current booking components in Chromium', () => {
   }) {
     const writes: Write[] = []
     await page.route('**/api/admin/services**', route => ok(route, { services: [service30] }))
+    // A seção de abertura vive na mesma tela; sem rota, as chamadas dela
+    // cairiam no servidor de teste e a tela mostraria erro por motivo alheio.
+    await page.route('**/api/admin/openings/overrides**', route => ok(route, { overrides: [] }))
+    await page.route('**/api/admin/openings', route => ok(route, { days: emptyWeek() }))
     await page.route('**/api/admin/availability**', route => ok(route, {
       date: '2026-09-24', serviceId: service30.id, serviceName: service30.name,
       durationMinutes: 30, reservedMinutes: 40, slotIntervalMinutes: 40,

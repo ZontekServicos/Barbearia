@@ -87,12 +87,32 @@ async function makeService(overrides: Partial<{ name: string; priceCents: number
   })
 }
 
+/**
+ * Abre a semana para os testes.
+ *
+ * A agenda nasce FECHADA desde a abertura manual, entao o expediente de teste
+ * precisa ser explicito — antes ele vinha de um padrao embutido no codigo, e
+ * era esse padrao que fazia a terca estar aberta sem ninguem pedir.
+ */
+async function openWeek(
+  startMinute = 9 * 60,
+  endMinute = 19 * 60,
+  weekdays = [0, 1, 2, 3, 4, 5, 6],
+) {
+  await prisma.scheduleOpening.deleteMany({ where: { weekday: { not: null } } })
+  await prisma.scheduleOpening.createMany({
+    data: weekdays.map(weekday => ({ weekday, startMinute, endMinute })),
+  })
+}
+
 async function cleanup() {
   await prisma.adminAuditLog.deleteMany()
   await prisma.appointment.deleteMany()
   await prisma.scheduleBlock.deleteMany()
   await prisma.service.deleteMany()
   await prisma.businessHours.deleteMany()
+  await prisma.scheduleOpening.deleteMany()
+  await prisma.scheduleDateOverride.deleteMany()
   await prisma.refreshToken.deleteMany()
   await prisma.user.deleteMany()
 }
@@ -123,6 +143,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
   beforeEach(async () => {
     await cleanup()
+    await openWeek()
     limits.globalRateLimit.resetKey("127.0.0.1")
   })
 
@@ -196,15 +217,32 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
   it("dia fechado não oferece horários", async () => {
     const service = await makeService()
-    // Segunda-feira é fechada no expediente padrão.
     const date = new Date(nextTuesday() + "T12:00:00Z")
     date.setUTCDate(date.getUTCDate() - 1)
     const monday = date.toISOString().slice(0, 10)
+
+    // Fechar é apagar as faixas daquele dia da semana: a agenda é fechada por
+    // padrão, então "fechado" é simplesmente não ter abertura.
+    await prisma.scheduleOpening.deleteMany({ where: { weekday: 1 } })
 
     const result = await availability.getAvailability(monday, service.id)
     assert.equal(result.open, false)
     assert.equal(result.reason, "CLOSED")
     assert.equal(result.slots.length, 0)
+  })
+
+  it("dia sem nenhuma faixa cadastrada é fechado — a agenda não abre sozinha", async () => {
+    const service = await makeService()
+    // Zera a semana inteira: é o estado de uma instalação recém-migrada.
+    await prisma.scheduleOpening.deleteMany()
+
+    for (const dateISO of [nextTuesday(), addDaysToShopDate(nextTuesday(), 1)]) {
+      const result = await availability.getAvailability(dateISO, service.id)
+      assert.equal(result.open, false, dateISO)
+      assert.equal(result.reason, "CLOSED", dateISO)
+      assert.equal(result.slots.length, 0, dateISO)
+      assert.equal(result.grid.length, 0, dateISO)
+    }
   })
 
   it("bloqueio administrativo remove os horários afetados", async () => {
@@ -471,7 +509,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
 
   it("preflight permite PUT do expediente apenas para a origem autorizada", async () => {
-    const request = (origin: string) => fetch(base + "/admin/business-hours", {
+    const request = (origin: string) => fetch(base + "/admin/openings/2", {
       method: "OPTIONS",
       headers: {
         Origin: origin,
@@ -660,21 +698,18 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const admin = await login("ADMIN")
     const date = nextTuesday()
 
-    const days = Array.from({ length: 7 }, (_, weekday) => ({
-      weekday,
-      closed: weekday !== 2,
-      opensAt: "10:00",
-      closesAt: "12:00",
-      breakStartsAt: null,
-      breakEndsAt: null,
-    }))
-
-    const saved = await call("/admin/business-hours", {
+    // Fecha a semana e abre só a terça, pela rota nova de abertura da agenda.
+    await prisma.scheduleOpening.deleteMany()
+    const saved = await call("/admin/openings/2", {
       method: "PUT",
-      body: { days },
+      body: { ranges: [{ opensAt: "10:00", closesAt: "12:00" }] },
       access: admin.access,
     })
     assert.equal(saved.status, 200)
+    assert.deepEqual(
+      saved.body.data.days.find((day: { weekday: number }) => day.weekday === 2).ranges,
+      [{ opensAt: "10:00", closesAt: "12:00" }],
+    )
 
     const result = await availability.getAvailability(date, service.id)
     assert.equal(result.slots[0]?.startsAtClock, "10:00")
@@ -713,17 +748,20 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
   it("com almoço configurado, a tarde recomeça no fim do intervalo", async () => {
     const admin = await login("ADMIN")
     const date = nextTuesday()
-    const days = [0, 1, 2, 3, 4, 5, 6].map(weekday => ({
-      weekday,
-      closed: weekday !== 2,
-      opensAt: "09:00",
-      closesAt: "20:00",
-      breakStartsAt: "12:00",
-      breakEndsAt: "14:00",
-    }))
+    // Duas faixas no mesmo dia — é assim que o almoço passa a ser representado:
+    // não como um "intervalo" dentro de uma janela, mas como duas aberturas.
+    await prisma.scheduleOpening.deleteMany()
     assert.equal(
-      (await call("/admin/business-hours", { method: "PUT", body: { days }, access: admin.access }))
-        .status,
+      (await call("/admin/openings/2", {
+        method: "PUT",
+        access: admin.access,
+        body: {
+          ranges: [
+            { opensAt: "09:00", closesAt: "12:00" },
+            { opensAt: "14:00", closesAt: "20:00" },
+          ],
+        },
+      })).status,
       200,
     )
 
@@ -818,12 +856,15 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
   it("rota real entrega grade, janelas e limites corretos para quatro durações", async () => {
     const admin = await login("ADMIN")
     const date = nextTuesday()
-    const days = Array.from({ length: 7 }, (_, weekday) => ({
-      weekday, closed: weekday !== 2, opensAt: "09:00", closesAt: "20:00",
-      breakStartsAt: "12:00", breakEndsAt: "14:00",
-    }))
-    assert.equal((await call("/admin/business-hours", {
-      method: "PUT", body: { days }, access: admin.access,
+    await prisma.scheduleOpening.deleteMany()
+    assert.equal((await call("/admin/openings/2", {
+      method: "PUT", access: admin.access,
+      body: {
+        ranges: [
+          { opensAt: "09:00", closesAt: "12:00" },
+          { opensAt: "14:00", closesAt: "20:00" },
+        ],
+      },
     })).status, 200)
     for (const [durationMinutes, morningLast, afternoonLast] of [
       [30, "11:00", "19:20"], [40, "11:00", "19:20"],
@@ -876,6 +917,8 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const service = await makeService()
     const monday = addDaysToShopDate(nextTuesday(), -1)
     const yesterday = addDaysToShopDate(instantToShopDate(new Date()), -1)
+    // Segunda sem faixa = fechada. O motivo CLOSED vem da ausência de abertura.
+    await prisma.scheduleOpening.deleteMany({ where: { weekday: 1 } })
     for (const [date, reason] of [[monday, "CLOSED"], [yesterday, "PAST_DATE"]]) {
       const result = await call("/booking/availability?date=" + date + "&serviceId=" + service.id)
       assert.equal(result.status, 200)
@@ -889,9 +932,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
 
   it("API usa relógio do servidor e não oferece passado nem antecedência insuficiente", async () => {
     const service = await makeService({ durationMinutes: 30 })
-    await schedule.replaceBusinessHours(Array.from({ length: 7 }, (_, weekday) => ({
-      weekday, closed: false, opensAt: "00:00", closesAt: "23:59", breakStartsAt: null, breakEndsAt: null,
-    })))
+    await openWeek(0, 1439)
     const requestedAt = new Date()
     const date = instantToShopDate(requestedAt)
     const result = await call("/booking/availability?date=" + date + "&serviceId=" + service.id)
@@ -999,9 +1040,7 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     const customer = await login()
     const date = nextTuesday()
     const previous = addDaysToShopDate(date, -1)
-    await schedule.replaceBusinessHours(Array.from({ length: 7 }, (_, weekday) => ({
-      weekday, closed: false, opensAt: "00:00", closesAt: "02:00", breakStartsAt: null, breakEndsAt: null,
-    })))
+    await openWeek(0, 120)
     await prisma.appointment.create({ data: {
       userId: customer.user.id, serviceId: service.id,
       startsAt: shopWallClockToInstant(previous, 23 * 60 + 59), endsAt: shopWallClockToInstant(date, 30),

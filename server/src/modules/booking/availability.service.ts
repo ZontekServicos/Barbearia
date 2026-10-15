@@ -8,7 +8,8 @@ import {
 } from "../../utils/time.js"
 import { BookingRules, reservedMinutesFor } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
-import { findBlocksOverlapping, getDayWindow } from "./schedule.service.js"
+import { findBlocksOverlapping } from "./schedule.service.js"
+import { resolveOpenWindows } from "./opening.service.js"
 import {
   blockedRange,
   computeSlotGrid,
@@ -19,7 +20,6 @@ import {
 } from "./availability.engine.js"
 import {
   computeSlotStarts,
-  windowsFromBusinessHours,
   type BusyInterval,
   type OpenWindow,
 } from "./availability.engine.js"
@@ -190,10 +190,15 @@ export async function getAvailability(
   const lastBookableDate = addDaysToShopDate(today, BookingRules.maximumAdvanceDays)
   if (dateISO > lastBookableDate) return closed("TOO_FAR")
 
-  const day = await getDayWindow(dateISO)
-  if (!day) return closed("CLOSED")
-
-  const windows: OpenWindow[] = windowsFromBusinessHours(day)
+  /**
+   * Agenda FECHADA por padrão.
+   *
+   * Sem faixa aberta para esta data não há o que oferecer — e isso inclui o dia
+   * que ninguém configurou, que antes caía num expediente embutido no código. A
+   * precedência (exceção da data > regra semanal > fechado) está inteira em
+   * `resolveOpenWindows`.
+   */
+  const windows: OpenWindow[] = await resolveOpenWindows(dateISO)
   if (windows.length === 0) return closed("CLOSED")
 
   const dayStart = shopWallClockToInstant(dateISO, 0)
@@ -407,8 +412,7 @@ export async function getAdminAvailability(
     slotIntervalMinutes: BookingRules.baseSlotMinutes,
   }
 
-  const day = await getDayWindow(dateISO)
-  const windows: OpenWindow[] = day ? windowsFromBusinessHours(day) : []
+  const windows: OpenWindow[] = await resolveOpenWindows(dateISO)
   if (windows.length === 0) {
     return { ...shell, open: false, windows: [], grid: [] }
   }

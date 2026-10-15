@@ -38,34 +38,6 @@ export function toPublicService(service: ServiceRecord): PublicService {
   }
 }
 
-export interface PublicBusinessHours {
-  weekday: number
-  closed: boolean
-  opensAt: string
-  closesAt: string
-  breakStartsAt: string | null
-  breakEndsAt: string | null
-}
-
-interface BusinessHoursRecord {
-  weekday: number
-  closed: boolean
-  openMinute: number
-  closeMinute: number
-  breakStartMinute: number | null
-  breakEndMinute: number | null
-}
-
-export function toPublicBusinessHours(record: BusinessHoursRecord): PublicBusinessHours {
-  return {
-    weekday: record.weekday,
-    closed: record.closed,
-    opensAt: minutesToClock(record.openMinute),
-    closesAt: minutesToClock(record.closeMinute),
-    breakStartsAt: record.breakStartMinute === null ? null : minutesToClock(record.breakStartMinute),
-    breakEndsAt: record.breakEndMinute === null ? null : minutesToClock(record.breakEndMinute),
-  }
-}
 
 export interface PublicScheduleBlock {
   id: string

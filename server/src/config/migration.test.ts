@@ -55,6 +55,8 @@ describe('migration inicial', () => {
       'public_contact_handles',
       'refresh_tokens',
       'schedule_blocks',
+      'schedule_date_overrides',
+      'schedule_openings',
       'services',
       'users',
     ])

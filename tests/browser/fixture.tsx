@@ -3,6 +3,7 @@ import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from '../../src/context/AuthContext'
 import Agenda from '../../src/pages/admin/Agenda'
 import Availability from '../../src/pages/admin/Availability'
+import ScheduleOpenings from '../../src/components/admin/ScheduleOpenings'
 import Services from '../../src/pages/admin/Services'
 import ClientLayout from '../../src/components/layouts/ClientLayout'
 import Schedule from '../../src/pages/client/Schedule'
@@ -50,6 +51,7 @@ function render() {
       <main className="p-4">{
         page === 'services' ? <Services /> :
         page === 'availability' ? <Availability /> :
+        page === 'openings' ? <ScheduleOpenings /> :
         <Agenda />
       }</main>}
   </AuthProvider></BrowserRouter>)

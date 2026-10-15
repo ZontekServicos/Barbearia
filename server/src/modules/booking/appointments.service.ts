@@ -24,10 +24,10 @@ import {
 } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { listBookableStartMinutes } from "./availability.service.js"
-import { fitsInAnyWindow, windowsFromBusinessHours } from "./availability.engine.js"
-import { getDayWindow } from "./schedule.service.js"
+import { fitsInAnyWindow } from "./availability.engine.js"
+import { resolveOpenWindows, SCHEDULE_RULES_LOCK } from "./opening.service.js"
 import type { Prisma } from "../../generated/prisma/client.js"
-import { lockKey, lockUser } from "../../utils/locks.js"
+import { lockKey, lockKeyShared, lockUser } from "../../utils/locks.js"
 import { generateUniquePublicReference } from "./public-reference.js"
 import {
   createPaymentForAppointment,
@@ -132,12 +132,19 @@ export async function createAppointment(
     )
   }
 
-  const day = await getDayWindow(input.date)
-  if (!day) {
+  /**
+   * Primeira conferência da janela aberta, fora da transação.
+   *
+   * Existe pela MENSAGEM: dizer "a barbearia está fechada nesta data" é melhor
+   * que "esse horário não está disponível". A decisão que vale é a reconferência
+   * DENTRO da transação, mais abaixo — esta aqui pode ficar velha.
+   */
+  const openWindows = await resolveOpenWindows(input.date)
+  if (openWindows.length === 0) {
     throw AppError.badRequest(ErrorCodes.CONFLICT, "A barbearia está fechada nesta data.")
   }
 
-  if (!fitsInAnyWindow(windowsFromBusinessHours(day), startMinute, reservedMinutes)) {
+  if (!fitsInAnyWindow(openWindows, startMinute, reservedMinutes)) {
     throw AppError.badRequest(
       ErrorCodes.CONFLICT,
       "Horário fora do expediente para a duração deste serviço.",
@@ -163,6 +170,32 @@ export async function createAppointment(
       // lock shared with schedule.service serializes all writes for the day;
       // the winner is committed and the loser rechecks the interval below.
       await lockKey(tx, `booking-day:${input.date}`)
+
+      /**
+       * Reconferência da janela aberta, agora DENTRO da transação.
+       *
+       * O lock COMPARTILHADO das regras é o par do exclusivo que a alteração de
+       * expediente toma: reservas simultâneas não esperam uma à outra (é o
+       * caminho quente), mas uma alteração de expediente espera as reservas em
+       * voo e, enquanto grava, nenhuma nova entra.
+       *
+       * Sem esta reconferência, fechar um horário enquanto alguém reserva
+       * deixaria a reserva gravar numa janela que já não existe: a checagem de
+       * cima aconteceu antes da transação e pode estar velha.
+       *
+       * A assimetria é intencional e é o que o requisito pede: fechar depois de
+       * a reserva existir NÃO a cancela (ela continua valendo, com aviso ao
+       * administrador); reservar depois de fechar é recusado.
+       */
+      await lockKeyShared(tx, SCHEDULE_RULES_LOCK)
+      const stillOpen = await resolveOpenWindows(input.date, tx)
+      if (!fitsInAnyWindow(stillOpen, startMinute, reservedMinutes)) {
+        throw AppError.conflict(
+          ErrorCodes.CONFLICT,
+          "Esse horário acabou de ser fechado pela barbearia. Escolha outro.",
+        )
+      }
+
       const userId = beforeInsert ? await beforeInsert(tx) : input.userId;
       // Solicitações pendentes vencidas que cobrem este intervalo são
       // liberadas AQUI, na mesma transação do insert e restritas ao período

@@ -232,8 +232,12 @@ export default function Landing() {
                       {day.closed ? (
                         <span className="text-xs bg-[var(--secondary)] text-[var(--muted-foreground)] px-2 py-0.5 rounded-full">Fechado</span>
                       ) : (
-                        <span className="text-sm text-[var(--foreground)] tabular-nums">
-                          {day.opensAt} – {day.closesAt}
+                        /* Todas as faixas, não só a primeira: um dia pode abrir
+                           de manhã, fechar para o almoço e reabrir à tarde.
+                           O `?? []` cobre backend publicado fora de ordem: a
+                           vitrine mostra a linha vazia em vez de quebrar. */
+                        <span className="text-sm text-[var(--foreground)] tabular-nums text-right">
+                          {(day.ranges ?? []).map(range => `${range.opensAt} – ${range.closesAt}`).join(' · ')}
                         </span>
                       )}
                     </div>

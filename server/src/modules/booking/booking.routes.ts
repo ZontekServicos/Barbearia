@@ -37,7 +37,7 @@ import {
   getMyAppointment,
   listMyAppointments,
 } from "./appointments.service.js"
-import { listBusinessHours } from "./schedule.service.js"
+import { listWeeklyOpenings } from "./opening.service.js"
 
 import { enforcePublicIpQuota } from "./public-quota.js"
 
@@ -51,8 +51,19 @@ bookingRouter.get("/services", async (_req, res) => {
   return sendSuccess(res, { services: await listActiveServices() })
 })
 
+/**
+ * Expediente semanal exibido na vitrine e no calendário.
+ *
+ * Vem da MESMA fonte que decide a disponibilidade. Antes saía de
+ * `business_hours`, e quando a abertura passou a viver em `schedule_openings`
+ * manter as duas faria a página anunciar "Ter 09:00–19:00" com a agenda
+ * fechada — duas verdades visíveis para o cliente.
+ *
+ * Expõe faixas e nada mais: quem reservou, por que está fechado e qualquer
+ * motivo continuam fora.
+ */
 bookingRouter.get("/business-hours", async (_req, res) => {
-  return sendSuccess(res, { days: await listBusinessHours() })
+  return sendSuccess(res, { days: await listWeeklyOpenings() })
 })
 
 /**

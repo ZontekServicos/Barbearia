@@ -144,6 +144,24 @@ async function approve(access: string, appointmentId: string) {
   })
 }
 
+/**
+ * Abre a semana para os testes.
+ *
+ * A agenda nasce FECHADA desde a abertura manual, entao o expediente de teste
+ * precisa ser explicito — antes ele vinha de um padrao embutido no codigo, e
+ * era esse padrao que fazia a terca estar aberta sem ninguem pedir.
+ */
+async function openWeek(
+  startMinute = 9 * 60,
+  endMinute = 19 * 60,
+  weekdays = [0, 1, 2, 3, 4, 5, 6],
+) {
+  await prisma.scheduleOpening.deleteMany({ where: { weekday: { not: null } } })
+  await prisma.scheduleOpening.createMany({
+    data: weekdays.map(weekday => ({ weekday, startMinute, endMinute })),
+  })
+}
+
 async function cleanup() {
   await prisma.paymentWebhookEvent.deleteMany()
   await prisma.payment.deleteMany()
@@ -154,6 +172,8 @@ async function cleanup() {
   await prisma.scheduleBlock.deleteMany()
   await prisma.service.deleteMany()
   await prisma.businessHours.deleteMany()
+  await prisma.scheduleOpening.deleteMany()
+  await prisma.scheduleDateOverride.deleteMany()
   await prisma.refreshToken.deleteMany()
   await prisma.user.deleteMany()
 }
@@ -191,11 +211,7 @@ describe("Confirmação mediante pagamento — PostgreSQL real", { skip: !enable
     ]) {
       limiter.resetKey("127.0.0.1")
     }
-    for (let weekday = 0; weekday < 7; weekday++) {
-      await prisma.businessHours.create({
-        data: { weekday, closed: false, openMinute: 9 * 60, closeMinute: 19 * 60 },
-      })
-    }
+    await openWeek()
   })
 
   // -------------------------------------------------------------------------

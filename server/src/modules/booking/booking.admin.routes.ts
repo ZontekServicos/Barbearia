@@ -15,9 +15,14 @@ import {
   listBlocksQuerySchema,
   listServicesQuerySchema,
   updateAppointmentStatusSchema,
-  updateBusinessHoursSchema,
   updateServiceSchema,
   uuidParamSchema,
+  weekdayParamSchema,
+  replaceOpeningsSchema,
+  copyOpeningsSchema,
+  listOverridesQuerySchema,
+  upsertOverrideSchema,
+  dateParamSchema,
 } from "./booking.schemas.js"
 import {
   createService,
@@ -30,9 +35,16 @@ import {
   createBlock,
   deleteBlock,
   listBlocks,
-  listBusinessHours,
-  replaceBusinessHours,
 } from "./schedule.service.js"
+import {
+  copyWeekdayOpenings,
+  countAppointmentsOutsideRanges,
+  listDateOverrides,
+  listWeeklyOpenings,
+  removeDateOverride,
+  replaceWeekdayOpenings,
+  upsertDateOverride,
+} from "./opening.service.js"
 import {
   decidePendingRequest,
   getAppointmentForAdmin,
@@ -95,19 +107,100 @@ bookingAdminRouter.post(
 )
 
 // --------------------------------------------------------------------------
-// Horário de funcionamento
+// Abertura da agenda — disponibilidade POSITIVA
+//
+// Substitui as rotas de `business-hours`, que escreviam numa tabela que já não
+// decide nada. Manter um editor que grava onde ninguém lê é pior que remover:
+// o administrador salvaria o expediente e a agenda não mudaria.
 // --------------------------------------------------------------------------
 
-bookingAdminRouter.get("/business-hours", async (_req, res) => {
-  return sendSuccess(res, { days: await listBusinessHours() })
+/** Os sete dias com suas faixas. Dia sem faixa vem `closed: true`. */
+bookingAdminRouter.get("/openings", async (_req, res) => {
+  return sendSuccess(res, { days: await listWeeklyOpenings() })
 })
 
-bookingAdminRouter.put(
-  "/business-hours",
-  validate({ body: updateBusinessHoursSchema }),
+/**
+ * ORDEM IMPORTA daqui até o fim desta seção.
+ *
+ * `/openings/:weekday` casaria com `/openings/copy` e `/openings/overrides`,
+ * capturando "copy" e "overrides" como se fossem dia da semana — e a resposta
+ * seria um 400 de validação em vez da rota certa. Express resolve na ordem de
+ * registro, então as rotas literais vêm ANTES da paramétrica, que fica por
+ * último de propósito.
+ */
+
+/** Copia as faixas de um dia para outros, SUBSTITUINDO o que havia neles. */
+bookingAdminRouter.post(
+  "/openings/copy",
+  validate({ body: copyOpeningsSchema }),
   async (req, res) => {
-    const { days } = req.body as z.infer<typeof updateBusinessHoursSchema>
-    return sendSuccess(res, { days: await replaceBusinessHours(days) })
+    const { from, to } = req.body as z.infer<typeof copyOpeningsSchema>
+    return sendSuccess(res, {
+      days: await copyWeekdayOpenings({ from, to, createdById: req.user!.id }),
+    })
+  },
+)
+
+/** Exceções por data de um período. */
+bookingAdminRouter.get(
+  "/openings/overrides",
+  validate({ query: listOverridesQuerySchema }),
+  async (req, res) => {
+    const { from, to } = req.validatedQuery as z.infer<typeof listOverridesQuerySchema>
+    return sendSuccess(res, { overrides: await listDateOverrides(from, to) })
+  },
+)
+
+/**
+ * Cria ou substitui a exceção de uma data.
+ *
+ * `ranges: []` fecha a data. A exceção vence a regra semanal por existir.
+ */
+bookingAdminRouter.put(
+  "/openings/overrides",
+  validate({ body: upsertOverrideSchema }),
+  async (req, res) => {
+    const body = req.body as z.infer<typeof upsertOverrideSchema>
+    const affected = await countAppointmentsOutsideRanges({ date: body.date, ranges: body.ranges })
+    return sendSuccess(res, {
+      override: await upsertDateOverride({ ...body, createdById: req.user!.id }),
+      appointmentsOutside: affected,
+    })
+  },
+)
+
+/** Remove a exceção e devolve a data à regra semanal. */
+bookingAdminRouter.delete(
+  "/openings/overrides/:date",
+  validate({ params: dateParamSchema }),
+  async (req, res) => {
+    const { date } = req.params as z.infer<typeof dateParamSchema>
+    await removeDateOverride(date)
+    return sendSuccess(res, { removed: true })
+  },
+)
+
+/**
+ * Substitui as faixas de UM dia da semana.
+ *
+ * Por último: ver a nota de ordem acima — esta rota é paramétrica e engoliria
+ * `copy` e `overrides` se viesse antes.
+ *
+ * Devolve junto quantos agendamentos ativos ficariam fora das novas faixas —
+ * é o número do aviso na tela. Nenhum deles é tocado: fechar horário não
+ * cancela ninguém.
+ */
+bookingAdminRouter.put(
+  "/openings/:weekday",
+  validate({ params: weekdayParamSchema, body: replaceOpeningsSchema }),
+  async (req, res) => {
+    const { weekday } = req.params as unknown as z.infer<typeof weekdayParamSchema>
+    const { ranges } = req.body as z.infer<typeof replaceOpeningsSchema>
+    const affected = await countAppointmentsOutsideRanges({ weekday, ranges })
+    return sendSuccess(res, {
+      days: await replaceWeekdayOpenings({ weekday, ranges, createdById: req.user!.id }),
+      appointmentsOutside: affected,
+    })
   },
 )
 

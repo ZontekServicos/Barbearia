@@ -27,13 +27,25 @@ export interface Service {
   active: boolean
 }
 
+/** Uma faixa de atendimento aberta, em hora local da barbearia. */
+export interface OpeningRange {
+  opensAt: string
+  closesAt: string
+}
+
+/**
+ * Expediente de um dia da semana.
+ *
+ * `ranges` substituiu o par abre/fecha com intervalo: um dia pode ter mais de
+ * duas faixas, e o almoço passou a ser simplesmente o vão entre duas delas.
+ *
+ * `closed` é derivado de `ranges` estar vazio — a agenda é fechada por padrão,
+ * então não ter faixa já significa fechado.
+ */
 export interface BusinessHoursDay {
   weekday: number
   closed: boolean
-  opensAt: string
-  closesAt: string
-  breakStartsAt: string | null
-  breakEndsAt: string | null
+  ranges: OpeningRange[]
 }
 
 export interface AvailableSlot {

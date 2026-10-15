@@ -1,5 +1,5 @@
 import { apiRequest } from "./api"
-import type { Appointment, AppointmentStatus, BusinessHoursDay, Service } from "./booking"
+import type { Appointment, AppointmentStatus, BusinessHoursDay, OpeningRange, Service } from "./booking"
 
 /**
  * Cobrança como o painel a vê.
@@ -253,17 +253,72 @@ export async function getAdminAvailability(
   return apiRequest<AdminAvailability>(`/admin/availability?${query.toString()}`)
 }
 
-export async function listAdminBusinessHours(): Promise<BusinessHoursDay[]> {
-  const data = await apiRequest<{ days: BusinessHoursDay[] }>("/admin/business-hours")
+// --------------------------------------------------------------------------
+// Abertura da agenda
+//
+// Substituiu as rotas de `business-hours`. A agenda é FECHADA por padrão: só
+// horário dentro de uma faixa aberta aceita agendamento novo.
+// --------------------------------------------------------------------------
+
+/** Exceção de uma data. `ranges` vazio = fechado naquele dia. */
+export interface DateOverride {
+  date: string
+  ranges: OpeningRange[]
+  note: string | null
+}
+
+export async function listOpenings(): Promise<BusinessHoursDay[]> {
+  const data = await apiRequest<{ days: BusinessHoursDay[] }>("/admin/openings")
   return data.days
 }
 
-export async function saveBusinessHours(days: BusinessHoursDay[]): Promise<BusinessHoursDay[]> {
-  const data = await apiRequest<{ days: BusinessHoursDay[] }>("/admin/business-hours", {
-    method: "PUT",
-    body: { days },
+/**
+ * Salva o dia inteiro: a lista enviada SUBSTITUI as faixas daquele dia.
+ *
+ * `appointmentsOutside` volta com quantos agendamentos ativos ficaram fora das
+ * novas faixas. Nenhum deles é cancelado — o número existe para a tela avisar.
+ */
+export async function saveWeekdayOpenings(
+  weekday: number,
+  ranges: OpeningRange[],
+): Promise<{ days: BusinessHoursDay[]; appointmentsOutside: number }> {
+  return apiRequest<{ days: BusinessHoursDay[]; appointmentsOutside: number }>(
+    `/admin/openings/${weekday}`,
+    { method: "PUT", body: { ranges } },
+  )
+}
+
+/** Copia as faixas de um dia para outros, substituindo o que havia neles. */
+export async function copyOpenings(from: number, to: number[]): Promise<BusinessHoursDay[]> {
+  const data = await apiRequest<{ days: BusinessHoursDay[] }>("/admin/openings/copy", {
+    method: "POST",
+    body: { from, to },
   })
   return data.days
+}
+
+export async function listDateOverrides(from: string, to: string): Promise<DateOverride[]> {
+  const query = new URLSearchParams({ from, to })
+  const data = await apiRequest<{ overrides: DateOverride[] }>(
+    `/admin/openings/overrides?${query.toString()}`,
+  )
+  return data.overrides
+}
+
+export async function saveDateOverride(input: {
+  date: string
+  ranges: OpeningRange[]
+  note?: string | null
+}): Promise<{ override: DateOverride; appointmentsOutside: number }> {
+  return apiRequest<{ override: DateOverride; appointmentsOutside: number }>(
+    "/admin/openings/overrides",
+    { method: "PUT", body: input },
+  )
+}
+
+/** Remove a exceção e devolve a data à regra semanal. */
+export async function removeDateOverride(date: string): Promise<void> {
+  await apiRequest(`/admin/openings/overrides/${date}`, { method: "DELETE" })
 }
 
 // --------------------------------------------------------------------------

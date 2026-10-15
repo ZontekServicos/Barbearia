@@ -5,6 +5,7 @@ import {
   RefreshCw, Unlock, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import ScheduleOpenings from '@/components/admin/ScheduleOpenings'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/Modal'
 import { ApiError } from '@/services/api'
@@ -172,9 +173,19 @@ export default function Availability() {
       <header className="mb-5">
         <h1 className="font-display text-2xl font-bold tracking-tight">Disponibilidade</h1>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Bloqueie horários que não quer atender. Agendamento de cliente não se desfaz por aqui.
+          Abra os horários que atende e bloqueie os que não quer. Agendamento de cliente não se
+          desfaz por aqui.
         </p>
       </header>
+
+      {/*
+        Abertura vem ANTES da grade de propósito: sem faixa aberta a grade está
+        vazia, e quem chega numa agenda fechada precisa encontrar primeiro o
+        lugar onde se abre — não um dia em branco sem explicação.
+      */}
+      <div className="mb-8 pb-8 border-b border-[var(--border)]">
+        <ScheduleOpenings />
+      </div>
 
       {/* Serviço: a duração dele define a grade exibida. */}
       {services && services.length > 1 ? (

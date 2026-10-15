@@ -65,51 +65,6 @@ export const listServicesQuerySchema = z.object({
     .default("false")
     .transform(value => value === "true"),
 })
-
-// ---------------------------------------------------------------------------
-// Horário de funcionamento
-// ---------------------------------------------------------------------------
-
-const businessHoursDaySchema = z
-  .object({
-    weekday: z.number().int().min(0).max(6),
-    closed: z.boolean(),
-    opensAt: clockSchema,
-    closesAt: clockSchema,
-    breakStartsAt: clockSchema.nullable().default(null),
-    breakEndsAt: clockSchema.nullable().default(null),
-  })
-  .refine(day => day.closed || day.opensAt < day.closesAt, {
-    message: "O fechamento deve ser depois da abertura.",
-    path: ["closesAt"],
-  })
-  .refine(
-    day =>
-      (day.breakStartsAt === null && day.breakEndsAt === null) ||
-      (day.breakStartsAt !== null && day.breakEndsAt !== null),
-    { message: "Informe início e fim do intervalo, ou nenhum dos dois.", path: ["breakStartsAt"] },
-  )
-  .refine(
-    day =>
-      day.breakStartsAt === null ||
-      day.breakEndsAt === null ||
-      (day.breakStartsAt < day.breakEndsAt &&
-        day.breakStartsAt >= day.opensAt &&
-        day.breakEndsAt <= day.closesAt),
-    { message: "O intervalo precisa estar dentro do expediente.", path: ["breakStartsAt"] },
-  )
-
-/** A semana inteira é enviada de uma vez: evita estado parcial inconsistente. */
-export const updateBusinessHoursSchema = z.object({
-  days: z
-    .array(businessHoursDaySchema)
-    .length(7, "Envie os sete dias da semana.")
-    .refine(
-      days => new Set(days.map(day => day.weekday)).size === 7,
-      "Cada dia da semana deve aparecer exatamente uma vez.",
-    ),
-})
-
 // ---------------------------------------------------------------------------
 // Bloqueios
 // ---------------------------------------------------------------------------
@@ -300,6 +255,55 @@ export const settlePaymentSchema = z.strictObject({
 export const reportPaymentSchema = z.strictObject({})
 
 /** Grade administrativa de disponibilidade de um dia, para um serviço. */
+// ---------------------------------------------------------------------------
+// Abertura da agenda
+// ---------------------------------------------------------------------------
+
+/**
+ * Uma faixa aberta, em hora local.
+ *
+ * `strictObject`: nada de id, weekday, date ou createdById vindo do navegador.
+ * O escopo (semanal ou data) e a autoria são decididos pela ROTA — o corpo
+ * descreve só as horas.
+ */
+const openingRangeSchema = z.strictObject({
+  opensAt: clockSchema,
+  closesAt: clockSchema,
+})
+
+/** Teto de faixas por dia: evita um corpo com milhares de intervalos. */
+const rangeListSchema = z.array(openingRangeSchema).max(12, "Faixas demais para um dia.")
+
+export const weekdayParamSchema = z.object({
+  weekday: z.coerce.number().int().min(0, "Dia inválido.").max(6, "Dia inválido."),
+})
+
+/** Lista completa do dia: salvar substitui, não acrescenta. Vazio = fechado. */
+export const replaceOpeningsSchema = z.strictObject({
+  ranges: rangeListSchema,
+})
+
+export const copyOpeningsSchema = z.strictObject({
+  from: z.number().int().min(0).max(6),
+  to: z.array(z.number().int().min(0).max(6)).min(1, "Escolha ao menos um dia.").max(7),
+})
+
+export const listOverridesQuerySchema = z.object({
+  from: shopDateSchema,
+  to: shopDateSchema,
+})
+
+/** Exceção de uma data. `ranges: []` é o que fecha a data. */
+export const upsertOverrideSchema = z.strictObject({
+  date: shopDateSchema,
+  ranges: rangeListSchema,
+  note: z.string().trim().max(160).nullable().optional(),
+})
+
+export const dateParamSchema = z.object({
+  date: shopDateSchema,
+})
+
 export const adminAvailabilityQuerySchema = z.object({
   date: shopDateSchema,
   serviceId: z.uuid("Serviço inválido."),
