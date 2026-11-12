@@ -157,6 +157,31 @@ export default function ScheduleOpenings() {
         </p>
       ) : (
         <>
+          {/*
+            Semana inteira fechada é o estado logo após publicar — a agenda
+            nasce fechada de propósito. Sem este aviso, a tela mostra sete
+            cards "Fechado" e nada diz que isso significa a agenda pública
+            sem NENHUM horário: é indistinguível de defeito para quem olha,
+            e o prejuízo corre em silêncio.
+          */}
+          {ready!.days.every(day => day.closed) && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-amber-400/50 bg-amber-400/10 px-4 py-3 flex gap-2.5"
+            >
+              <AlertCircle className="h-4 w-4 text-amber-300 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-200">
+                  A agenda está fechada em todos os dias
+                </p>
+                <p className="text-xs text-amber-200/80 mt-1">
+                  Nenhum horário aceita agendamento agora, e a página pública não mostra
+                  nada para o cliente. Abra ao menos um dia abaixo.
+                </p>
+              </div>
+            </div>
+          )}
+
           <ul className="space-y-2.5 mb-8">
             {WEEKDAYS.map(({ weekday, label }) => {
               const day = ready!.days.find(entry => entry.weekday === weekday)

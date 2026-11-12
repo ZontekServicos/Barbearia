@@ -51,7 +51,28 @@ A migration de senha mantém usuários, IDs, telefone único, auditoria e relaç
 
 Variáveis sem uso no runtime novo, removíveis após confirmar sucesso da implantação e encerrar eventual janela de rollback: `SMS_PROVIDER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TWILIO_MESSAGING_SERVICE_SID`, `TWILIO_TIMEOUT_MS`, `AUTH_OTP_DEV_MODE`, `OTP_TTL_MINUTES`, `OTP_MAX_ATTEMPTS`. Não expor valores em tickets, Git, logs ou screenshots.
 
-A variável exata do frontend é **`VITE_API_URL`**, lida em `src/services/api.ts`. É pública e incorporada durante o build. Seu padrão de produção é `/api`; esse padrão só funciona quando existe proxy para a API no mesmo domínio. Para frontend/API separados, o operador deve configurar a URL HTTPS pública correta da API no build do frontend e alinhar `FRONTEND_URL`, CORS e cookies no backend. Nunca usar a URL privada do PostgreSQL nem segredos em `VITE_*`.
+A variável exata do frontend é **`VITE_API_URL`**, lida em `src/services/api.ts`. É pública e incorporada durante o build. Para frontend/API separados, o operador deve configurar a URL HTTPS pública correta da API no build do frontend e alinhar `FRONTEND_URL`, CORS e cookies no backend. Nunca usar a URL privada do PostgreSQL nem segredos em `VITE_*`.
+
+> **A build de produção agora EXIGE `VITE_API_URL`.** `vite.config.ts` interrompe
+> o build quando ela falta. Antes havia um padrão silencioso de `/api`, que só
+> funciona com proxy no mesmo domínio — com os dois serviços separados, ele
+> produzia um frontend que chamava `/api` no próprio host estático, onde o
+> `Caddyfile` responde 404 de propósito. O resultado era o pior tipo de falha:
+> build verde, deploy verde, aplicação inteiramente quebrada com aparência de
+> publicada.
+>
+> Quem de fato serve a API no mesmo domínio continua podendo usar o proxy —
+> basta declarar isso: `VITE_API_URL=/api`. O custo é uma variável; o ganho é o
+> erro aparecer no build em vez de no primeiro cliente.
+
+### Binários nativos são conferidos no build
+
+`pnpm build` do backend termina em `node scripts/verify-native.mjs`, que faz um
+hash e um verify reais com `@node-rs/argon2`. Se o binário da plataforma faltar
+— lockfile ignorado, libc inesperada, imagem base trocada — o build falha com
+mensagem explícita. Sem essa checagem a falha apareceria no **primeiro login**
+em produção, como erro interno sem relação aparente com o deploy. Instale sempre
+com `--frozen-lockfile`.
 
 ### Descompasso de versão entre frontend e backend
 
@@ -152,7 +173,34 @@ Comando exato do bootstrap em produção: **`node dist/scripts/bootstrap-admin.j
 
 `BOOTSTRAP_ADMIN_NAME` é opcional. Uma base vazia cria ADMIN/ACTIVE com telefone e senha informados. Um ADMIN/ACTIVE já com senha é preservado por padrão. `BOOTSTRAP_ADMIN_RESET_PASSWORD=true` confirma substituição intencional da senha existente; `BOOTSTRAP_ADMIN_ALLOW_PROMOTION=true` confirma promoção/reativação de outro registro. Não habilitar flags para contornar uma conta de identidade desconhecida. Ao estabelecer credencial, sessões anteriores são revogadas e o evento é auditado sem senha/hash.
 
-Após autenticar como admin, cadastrar serviços reais, durações/preços e revisar o expediente/bloqueios pela interface. Um catálogo vazio não recebe serviços fictícios automaticamente. Dias sem configuração usam o expediente padrão do backend; revise antes de abrir agendamentos ao público.
+Após autenticar como admin, cadastrar serviços reais, durações/preços e revisar o expediente/bloqueios pela interface. Um catálogo vazio não recebe serviços fictícios automaticamente.
+
+### A agenda nasce fechada — abra a semana
+
+**Não existe mais expediente padrão no backend.** Desde a abertura manual, dia
+sem faixa cadastrada é dia fechado: logo após publicar, a página pública fica
+**sem nenhum horário** até alguém abrir a semana. É deliberado — a agenda não
+deve reabrir sozinha num dia que a barbearia fechou —, mas para quem olha de
+fora é indistinguível de defeito, e o prejuízo corre em silêncio.
+
+Duas formas de resolver, nesta ordem de preferência:
+
+1. **Pela interface**, em Disponibilidade → Abertura da agenda. É o caminho
+   normal, e a tela avisa em destaque enquanto todos os dias estiverem fechados.
+2. **Pelo comando**, quando quiser um ponto de partida imediato:
+
+```bash
+node dist/scripts/ensure-week.js
+```
+
+Ele abre terça a sábado, 09:00–19:00, **apenas se não houver nenhuma faixa
+cadastrada**. É idempotente e nunca sobrescreve ajuste manual — rodar duas
+vezes, ou depois de a barbearia mexer nos horários, não altera nada.
+
+Não foi colocado no pré-deploy de propósito: o pré-deploy roda em toda
+publicação, e semear ali desfaria uma semana fechada intencionalmente na
+publicação seguinte — a agenda voltaria a abrir sozinha, que é exatamente o
+comportamento que a abertura manual veio eliminar.
 
 ## Verificação após a publicação
 

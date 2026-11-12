@@ -418,6 +418,21 @@ test.describe('current booking components in Chromium', () => {
     await expect(page.getByText(/A agenda começa fechada/)).toBeVisible()
   })
 
+  test('abertura: semana toda fechada grita na tela', async ({ page }) => {
+    await setup(page)
+    await openOpenings(page)
+    // É o estado logo após publicar: sete "Fechado" sem explicação parecem defeito.
+    const alerta = page.getByRole('alert')
+    await expect(alerta).toContainText('fechada em todos os dias')
+    await expect(alerta).toContainText('página pública não mostra nada')
+  })
+
+  test('abertura: com um dia aberto o alerta some', async ({ page }) => {
+    await setup(page)
+    await openOpenings(page, { days: weekWith(2, [['09:00', '12:00']]) })
+    await expect(page.getByText('fechada em todos os dias')).toHaveCount(0)
+  })
+
   test('abertura: criar um intervalo e salvar envia a lista do dia', async ({ page }) => {
     await setup(page)
     const writes = await openOpenings(page, { savedDays: weekWith(2, [['09:00', '12:00']]) })
@@ -485,7 +500,9 @@ test.describe('current booking components in Chromium', () => {
     await page.getByLabel('Início').fill('12:00')
     await page.getByLabel('Fim').fill('09:00')
     await page.getByRole('button', { name: 'Salvar' }).click()
-    await expect(page.getByRole('alert')).toContainText('deve ser depois')
+    // Escopo no card do dia: a tela também tem o alerta de "semana fechada".
+    const erroDoDia = page.locator('#day-2').getByRole('alert')
+    await expect(erroDoDia).toContainText('deve ser depois')
     expect(writes).toEqual([])
 
     // Agora sobreposição.
@@ -495,7 +512,7 @@ test.describe('current booking components in Chromium', () => {
     await page.getByLabel('Início').nth(1).fill('12:00')
     await page.getByLabel('Fim').nth(1).fill('18:00')
     await page.getByRole('button', { name: 'Salvar' }).click()
-    await expect(page.getByRole('alert')).toContainText('sobrep')
+    await expect(erroDoDia).toContainText('sobrep')
     expect(writes).toEqual([])
   })
 
@@ -766,7 +783,11 @@ test.describe('current booking components in Chromium', () => {
     await page.getByLabel('Fim').fill('09:30')
     await page.getByLabel('Motivo').fill('Entrega')
     await page.getByRole('button', { name: 'Bloquear', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('O fim deve ser depois do início.')
+    // Escopo no diálogo: a tela de Disponibilidade também traz o alerta de
+    // "semana fechada" da seção de abertura.
+    await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+      'O fim deve ser depois do início.',
+    )
     expect(writes).toEqual([])
 
     // Intervalo que não coincide com início de slot é aceito como intervalo.

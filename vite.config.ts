@@ -1,14 +1,47 @@
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
 import siteConfiguration from './.figma/make/site.json'
 
+/**
+ * A URL da API precisa ser uma DECISÃO, não um default.
+ *
+ * `src/services/api.ts` cai em `/api` quando a variável falta. Com frontend e
+ * API em serviços separados no Railway, esse caminho não existe no host
+ * estático — e o `Caddyfile` responde 404 explícito em `/api` de propósito,
+ * para não devolver HTML onde se espera JSON. O resultado era o pior tipo de
+ * falha: build verde, deploy verde, e uma aplicação que parece publicada
+ * enquanto toda requisição morre em 404.
+ *
+ * Então a build de produção exige a variável. Quem de fato serve a API no
+ * mesmo domínio continua podendo usar o proxy — basta dizer isso em voz alta,
+ * com `VITE_API_URL=/api`. O custo é uma variável; o ganho é que o erro
+ * aparece no build, não no primeiro cliente.
+ */
+function assertApiUrl(mode: string, cwd: string) {
+  if (mode !== 'production') return
+  const { VITE_API_URL } = loadEnv(mode, cwd, 'VITE_')
+  if (VITE_API_URL && VITE_API_URL.trim().length > 0) return
+
+  throw new Error(
+    'VITE_API_URL não definida na build de produção.\n\n' +
+      'Sem ela o frontend chama "/api" no próprio host estático, onde a API não ' +
+      'existe — o Caddyfile responde 404 e a aplicação quebra inteira parecendo ' +
+      'publicada.\n\n' +
+      'Escolha uma das duas:\n' +
+      '  • serviços separados → VITE_API_URL=https://<sua-api>/  (URL pública da API)\n' +
+      '  • API no mesmo domínio via proxy → VITE_API_URL=/api  (explícito)\n',
+  )
+}
+
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
   const emitSourcemaps = mode === 'development'
+
+  assertApiUrl(mode, __dirname)
 
   return {
     base: process.env.FIGMA_PUBLIC_URL ? `${process.env.FIGMA_PUBLIC_URL}/` : '/',
