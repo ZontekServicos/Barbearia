@@ -81,6 +81,22 @@ export const BookingRules = {
   customerCancellationCutoffMinutes: 120,
 
   /**
+   * Quanto se olha para TRÁS ao procurar o que ocupa um dia.
+   *
+   * Um atendimento iniciado ontem pode invadir a manhã de hoje, então a busca
+   * é por sobreposição. O detalhe que importa é de DESEMPENHO: sem um limite
+   * inferior em `starts_at`, a condição deixa de ser uma faixa e o PostgreSQL
+   * cai em varredura sequencial assim que o número de reservas vivas cresce —
+   * medido em 8,9 ms contra 0,059 ms com o limite, em 26 mil reservas.
+   *
+   * 24 h é o dobro da reserva máxima possível (duração ≤ 8 h mais dois buffers
+   * de ≤ 2 h = 12 h), então nenhuma reserva que toque este dia fica de fora.
+   * `booking.rules.test.ts` falha se esses tetos subirem a ponto de encostar
+   * neste recuo — é o que impede a constante de envelhecer em silêncio.
+   */
+  overlapLookbackMinutes: 24 * 60,
+
+  /**
    * Janela para pagar, contada da APROVAÇÃO do barbeiro.
    *
    * Durante ela o horário continua reservado — a EXCLUDE cobre
@@ -218,6 +234,16 @@ export function paymentWindowMinutesFor(
  * Um corte de 30 min com grade de 40 ocupa 40; uma pigmentação de 50 ocupa
  * 50, porque o serviço manda quando é maior que a grade.
  */
+/**
+ * Início da varredura de sobreposição para um dia.
+ *
+ * Um ponto só para os dois lados da agenda — agendamentos e bloqueios — não
+ * divergirem no recuo. Ver `BookingRules.overlapLookbackMinutes`.
+ */
+export function overlapScanFrom(dayStart: Date): Date {
+  return new Date(dayStart.getTime() - BookingRules.overlapLookbackMinutes * 60_000)
+}
+
 export function reservedMinutesFor(
   durationMinutes: number,
   bufferBeforeMinutes = 0,

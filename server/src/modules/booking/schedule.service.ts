@@ -8,6 +8,7 @@ import {
   shopWallClockToInstant,
 } from "../../utils/time.js"
 import { toPublicScheduleBlock, type PublicScheduleBlock } from "./booking.mapper.js"
+import { overlapScanFrom } from "./booking.rules.js"
 
 /**
  * Este módulo cuida apenas de disponibilidade NEGATIVA: bloqueios.
@@ -42,7 +43,14 @@ export async function listBlocks(from: string, to: string): Promise<PublicSchedu
 /** Bloqueios que tocam um intervalo — usado pela disponibilidade. */
 export async function findBlocksOverlapping(rangeStart: Date, rangeEnd: Date) {
   return prisma.scheduleBlock.findMany({
-    where: { startsAt: { lt: rangeEnd }, endsAt: { gt: rangeStart } },
+    where: {
+      // Limite inferior pelo mesmo motivo da busca de agendamentos: sem ele a
+      // condição deixa de ser faixa e passa a varrer o histórico inteiro. Um
+      // bloqueio vai no máximo de meia-noite a meia-noite (`blockWholeDay`),
+      // então o recuo de um dia cobre qualquer um que toque este intervalo.
+      startsAt: { gte: overlapScanFrom(rangeStart), lt: rangeEnd },
+      endsAt: { gt: rangeStart },
+    },
     orderBy: { startsAt: "asc" },
   })
 }

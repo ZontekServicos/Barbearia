@@ -553,7 +553,13 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     assert.equal(result.status, 401)
   })
 
-  it("ignora userId enviado no corpo — o dono é sempre a sessão", async () => {
+  it("recusa userId enviado no corpo — o dono é sempre a sessão", async () => {
+    /**
+     * Antes o campo era DESCARTADO em silêncio (`z.object`) e a reserva nascia
+     * com o dono certo. Passou a ser RECUSADO (`z.strictObject`): a garantia é
+     * a mesma, mas deixa de depender de o controller aplicar o `userId` da
+     * sessão por último — o que uma reordenação inocente quebraria sem alarde.
+     */
     const service = await makeService()
     const customer = await login()
     const victim = await login()
@@ -568,9 +574,17 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
       access: customer.access,
     })
 
-    assert.equal(created.status, 201)
-    const stored = await prisma.appointment.findFirst()
-    assert.equal(stored?.userId, customer.user.id)
+    assert.equal(created.status, 400)
+    assert.equal(await prisma.appointment.count(), 0, "criou reserva apesar do 400")
+
+    // E o pedido sem o campo extra continua funcionando, com o dono da sessão.
+    const legitimate = await call("/booking/appointments", {
+      body: { serviceId: service.id, date: nextTuesday(), startsAt: "10:20" },
+      access: customer.access,
+    })
+    assert.equal(legitimate.status, 201)
+    const stored = await prisma.appointment.findFirstOrThrow()
+    assert.equal(stored.userId, customer.user.id)
   })
 
   // -------------------------------------------------------------------------
@@ -1058,6 +1072,92 @@ describe("Agenda — Express + Prisma + PostgreSQL real", { skip: !enabled }, ()
     assert.equal(agenda.length, 1)
     assert.equal(agenda[0]?.startsAtClock, "23:59")
     assert.equal(agenda[0]?.endsAtClock, "00:30")
+  })
+
+  it("a reserva MAIS LONGA possível iniciada ontem ainda é encontrada hoje", async () => {
+    /**
+     * Caso-limite do recuo da varredura (`overlapLookbackMinutes`).
+     *
+     * A busca do dia ganhou limite inferior em `starts_at` por desempenho. O
+     * risco que isso cria é justamente este: recuar pouco deixa de fora um
+     * atendimento que começou ontem e invade a madrugada — e o horário ocupado
+     * voltaria a ser oferecido.
+     *
+     * 8h é a maior duração que o catálogo aceita, então esta é a reserva mais
+     * distante do início do dia que pode alcançá-lo.
+     */
+    const service = await makeService({ durationMinutes: 480 })
+    const customer = await login()
+    const date = nextTuesday()
+    const previous = addDaysToShopDate(date, -1)
+    await openWeek(0, 1439)
+
+    // Começa 16:01 de ontem e termina 00:01 de hoje: invade o dia por 1 minuto.
+    const startsAt = shopWallClockToInstant(previous, 16 * 60 + 1)
+    await prisma.appointment.create({ data: {
+      userId: customer.user.id, serviceId: service.id,
+      startsAt,
+      endsAt: shopWallClockToInstant(date, 1),
+      reservedEndsAt: shopWallClockToInstant(date, 1),
+      serviceName: service.name, servicePriceCents: service.priceCents,
+      status: "CONFIRMED",
+    } })
+
+    const result = await availability.getAvailability(date, service.id)
+    // 00:00 está ocupado pela reserva de ontem; o primeiro livre vem depois.
+    assert.ok(!result.slots.some(slot => slot.startsAtClock === "00:00"),
+      "o horário invadido pela reserva de ontem foi oferecido de novo")
+    assert.equal(result.grid.find(entry => entry.startsAtClock === "00:00")?.available, false)
+
+    // E a criação concorda com a grade — a autoridade é ela, não a tela.
+    const other = await login()
+    const refused = await call("/booking/appointments", {
+      access: other.access,
+      body: { serviceId: service.id, date, startsAt: "00:00" },
+    })
+    assert.ok([400, 409].includes(refused.status), "status " + refused.status)
+  })
+
+  it("rotas de escrita recusam campo desconhecido em vez de descartar", async () => {
+    const service = await makeService({ durationMinutes: 30 })
+    const customer = await login()
+    const admin = await login("ADMIN")
+    const date = nextTuesday()
+
+    // Criar reserva: nada de userId, status ou preço vindos do navegador.
+    for (const extra of [
+      { userId: admin.user.id },
+      { status: "CONFIRMED" },
+      { servicePriceCents: 1 },
+      { reservedEndsAt: new Date().toISOString() },
+    ]) {
+      const response = await call("/booking/appointments", {
+        access: customer.access,
+        body: { serviceId: service.id, date, startsAt: "09:00", ...extra },
+      })
+      assert.equal(response.status, 400, JSON.stringify(extra))
+    }
+    assert.equal(await prisma.appointment.count(), 0, "gravou apesar do 400")
+
+    // O pedido legítimo continua passando.
+    const created = await call("/booking/appointments", {
+      access: customer.access,
+      body: { serviceId: service.id, date, startsAt: "09:00" },
+    })
+    assert.equal(created.status, 201)
+
+    // Mudar status: só o campo `status`.
+    const hostile = await call(`/admin/appointments/${created.body.data.appointment.id}/status`, {
+      method: "PATCH",
+      access: admin.access,
+      body: { status: "CANCELLED", cancelledAt: new Date().toISOString() },
+    })
+    assert.equal(hostile.status, 400)
+    assert.equal(
+      (await prisma.appointment.findFirstOrThrow({})).status,
+      created.body.data.appointment.status,
+      "o status mudou apesar do 400",
+    )
   })
 
   it("serviços preservam descrição e inatividade em PATCH parcial e reativam explicitamente", async () => {

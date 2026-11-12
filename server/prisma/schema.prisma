@@ -33,7 +33,10 @@ model User {
   /// Argon2id. Nulo = conta herdada do fluxo OTP, sem credencial estabelecida.
   /// Enquanto for nulo o login por senha é recusado (ver auth.service).
   passwordHash      String?   @map("password_hash") @db.VarChar(255)
-  /// Marca a última troca de senha; sessões anteriores a ela são revogadas.
+  /// Auditoria da última troca de senha. NÃO é o que invalida sessão: quem faz
+  /// isso é `refresh_tokens.revoked_at`, revogado na MESMA transação da troca,
+  /// e o access token morre junto porque carrega o `sid` da sessão e o
+  /// middleware recarrega essa linha a cada requisição (ver middlewares/auth).
   passwordUpdatedAt DateTime? @map("password_updated_at")
   /// Freio durável contra força bruta, independente de IP e de réplica.
   failedLoginAttempts Int       @default(0) @map("failed_login_attempts")

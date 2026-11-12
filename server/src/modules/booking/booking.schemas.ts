@@ -104,7 +104,7 @@ export const availabilityQuerySchema = z.object({
  * O cliente envia data + horário local e o serviço. Duração, fim e preço são
  * calculados no servidor — nada disso vem do cliente.
  */
-export const createAppointmentSchema = z.object({
+export const createAppointmentSchema = z.strictObject({
   serviceId: z.uuid("Serviço inválido."),
   date: shopDateSchema,
   startsAt: clockSchema,
@@ -132,7 +132,7 @@ export const adminAgendaQuerySchema = z
  * propósito: reabrir um atendimento encerrado exige criar um novo agendamento,
  * que passa pela checagem de conflito.
  */
-export const updateAppointmentStatusSchema = z.object({
+export const updateAppointmentStatusSchema = z.strictObject({
   status: z.enum(["COMPLETED", "CANCELLED", "NO_SHOW"]),
 })
 

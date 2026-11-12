@@ -6,7 +6,7 @@ import {
   parseShopDate,
   shopWallClockToInstant,
 } from "../../utils/time.js"
-import { BookingRules, reservedMinutesFor } from "./booking.rules.js"
+import { BookingRules, overlapScanFrom, reservedMinutesFor } from "./booking.rules.js"
 import { getBookableService } from "./catalog.service.js"
 import { findBlocksOverlapping } from "./schedule.service.js"
 import { resolveOpenWindows } from "./opening.service.js"
@@ -206,11 +206,14 @@ export async function getAvailability(
 
   // Um atendimento pode ter começado no dia anterior e invadir a manhã, então
   // buscamos por sobreposição de intervalo e não por "starts_at neste dia".
+  // O limite INFERIOR mantém a condição numa faixa indexável — ver
+  // `overlapLookbackMinutes`.
+  const scanFrom = overlapScanFrom(dayStart)
   const [appointments, blocks] = await Promise.all([
     prisma.appointment.findMany({
       where: {
         ...blockingAppointmentFilter(now),
-        startsAt: { lt: dayEnd },
+        startsAt: { gte: scanFrom, lt: dayEnd },
         reservedEndsAt: { gt: dayStart },
       },
       select: { startsAt: true, reservedEndsAt: true },
@@ -424,7 +427,7 @@ export async function getAdminAvailability(
     prisma.appointment.findMany({
       where: {
         ...blockingAppointmentFilter(now),
-        startsAt: { lt: dayEnd },
+        startsAt: { gte: overlapScanFrom(dayStart), lt: dayEnd },
         reservedEndsAt: { gt: dayStart },
       },
       // O id vem para a tela poder levar ao detalhe do agendamento. Nome,
