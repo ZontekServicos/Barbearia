@@ -133,6 +133,13 @@ describe("fallback de SPA sobre o dist real", () => {
       "/login",
       "/cadastro",
       "/agendar",
+      // Políticas: links de rodapé circulam por fora do app (WhatsApp, busca),
+      // então acesso direto e F5 precisam funcionar como em qualquer rota.
+      "/politicas",
+      "/politicas/privacidade",
+      "/politicas/uso",
+      "/politicas/cookies",
+      "/politicas/seguranca",
       "/conta/pendente",
       "/conta/bloqueada",
       "/admin",

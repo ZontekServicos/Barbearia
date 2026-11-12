@@ -349,6 +349,145 @@ test.describe('current booking components in Chromium', () => {
   }
 
   // -------------------------------------------------------------------------
+  // Políticas e aviso de dados
+  // -------------------------------------------------------------------------
+
+  const POLICY_TITLES: Record<string, string> = {
+    privacidade: 'Política de Privacidade',
+    uso: 'Termos de Uso',
+    cookies: 'Política de Cookies',
+    seguranca: 'Segurança',
+  }
+
+  const openPolicy = (page: Page, slug: string) =>
+    page.goto('/tests/browser/fixture.html?page=policy&token=' + slug)
+
+  for (const [slug, title] of Object.entries(POLICY_TITLES)) {
+    test(`política ${slug}: abre pelo slug e mostra o conteúdo`, async ({ page }) => {
+      await setup(page)
+      await openPolicy(page, slug)
+      await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+      // Tem corpo de verdade, não só o título.
+      const headings = await page.getByRole('heading', { level: 2 }).allInnerTexts()
+      expect(headings.length).toBeGreaterThanOrEqual(4)
+      await expect(page.getByText(/Última atualização/)).toBeVisible()
+    })
+  }
+
+  test('política: slug desconhecido cai na primeira em vez de erro', async ({ page }) => {
+    await setup(page)
+    await openPolicy(page, 'nao-existe')
+    await expect(
+      page.getByRole('heading', { level: 1, name: POLICY_TITLES.privacidade }),
+    ).toBeVisible()
+  })
+
+  test('política: navega entre as quatro e marca a atual', async ({ page }) => {
+    await setup(page)
+    await openPolicy(page, 'privacidade')
+    const atual = page.getByRole('link', { name: POLICY_TITLES.privacidade })
+    await expect(atual).toHaveAttribute('aria-current', 'page')
+
+    await page.getByRole('link', { name: POLICY_TITLES.cookies }).click()
+    await expect(page.getByRole('heading', { level: 1, name: POLICY_TITLES.cookies })).toBeVisible()
+    await expect(page.getByRole('link', { name: POLICY_TITLES.cookies })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  test('política: avisa o dono enquanto houver campo por preencher', async ({ page }) => {
+    await setup(page)
+    await openPolicy(page, 'privacidade')
+    // O texto tem `[preencher]` por desenho — razão social, canal do titular e
+    // prazo de guarda são fatos que só a barbearia sabe. O aviso existe para
+    // isso não ir ao ar por esquecimento.
+    const aviso = page.getByRole('status')
+    await expect(aviso).toContainText('ainda não finalizado')
+    await expect(aviso).toContainText('policies.ts')
+  })
+
+  test('política de cookies: declara que não há rastreador', async ({ page }) => {
+    await setup(page)
+    await openPolicy(page, 'cookies')
+    const texto = await page.locator('article').innerText()
+    // A afirmação central, e ela é verdadeira neste projeto.
+    expect(texto).toMatch(/não usa cookie de publicidade/i)
+    expect(texto).toMatch(/Google Analytics/i)
+    expect(texto).toMatch(/httpOnly/i)
+  })
+
+  test('política de privacidade: não promete coletar o que o sistema não coleta', async ({ page }) => {
+    await setup(page)
+    await openPolicy(page, 'privacidade')
+    const texto = await page.locator('article').innerText()
+    // O sistema não tem campo de e-mail: a política precisa dizer isso, e o
+    // teste trava a regressão de alguém "completar" a lista sem conferir.
+    expect(texto).toMatch(/E-mail — o sistema não tem onde guardar/i)
+    expect(texto).toMatch(/Argon2id/i)
+  })
+
+  test('aviso de dados: aparece, dispensa e não volta', async ({ page }) => {
+    await setup(page)
+    await open(page, 'cookie-banner')
+
+    const aviso = page.getByRole('region', { name: /Aviso sobre dados/ })
+    await expect(aviso).toBeVisible()
+    await expect(aviso).toContainText('Guardamos só o necessário')
+    // Não finge oferecer escolha que não existe.
+    await expect(aviso.getByRole('button', { name: /Aceitar|Recusar/ })).toHaveCount(0)
+
+    await aviso.getByRole('button', { name: 'Entendi' }).click()
+    await expect(aviso).toHaveCount(0)
+    expect(await page.evaluate(() => localStorage.getItem('cookie_consent'))).not.toBeNull()
+
+    // Recarregar não traz de volta.
+    await page.reload()
+    await expect(page.getByRole('region', { name: /Aviso sobre dados/ })).toHaveCount(0)
+  })
+
+  test('aviso de dados: o X também dispensa', async ({ page }) => {
+    await setup(page)
+    await open(page, 'cookie-banner')
+    await page.getByRole('button', { name: 'Fechar aviso' }).click()
+    await expect(page.getByRole('region', { name: /Aviso sobre dados/ })).toHaveCount(0)
+  })
+
+  test('aviso de dados: armazenamento bloqueado não quebra a página', async ({ page }) => {
+    await setup(page)
+    // Aba anônima com armazenamento negado: ler e gravar lançam.
+    await page.addInitScript(() => {
+      const bloqueado = () => { throw new Error('storage bloqueado') }
+      Object.defineProperty(window, 'localStorage', {
+        configurable: true,
+        get: () => ({ getItem: bloqueado, setItem: bloqueado, removeItem: bloqueado }),
+      })
+    })
+    await open(page, 'cookie-banner')
+
+    // A página continua de pé e o aviso aparece.
+    await expect(page.getByText('Conteúdo da página')).toBeVisible()
+    const aviso = page.getByRole('region', { name: /Aviso sobre dados/ })
+    await expect(aviso).toBeVisible()
+    // Dispensar não pode lançar: some da tela mesmo sem onde gravar.
+    await aviso.getByRole('button', { name: 'Entendi' }).click()
+    await expect(aviso).toHaveCount(0)
+  })
+
+  for (const width of [360, 375, 390, 412, 430]) {
+    test('políticas mobile ' + width + ': texto e aviso cabem; alvos >=44px', async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await setup(page)
+      await openPolicy(page, 'privacidade')
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+      await noOverflow(page); await touchTargets(page)
+      // Com o aviso na tela, que é fixo no rodapé e pode estourar.
+      await expect(page.getByRole('region', { name: /Aviso sobre dados/ })).toBeVisible()
+      await noOverflow(page)
+    })
+  }
+
+  // -------------------------------------------------------------------------
   // Abertura da agenda
   // -------------------------------------------------------------------------
 

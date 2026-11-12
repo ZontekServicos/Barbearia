@@ -13,6 +13,8 @@ import AdminLayout from "./components/layouts/AdminLayout"
 
 // Public
 import Landing from "./pages/Landing"
+import PolicyPage from "./pages/PolicyPage"
+import CookieBanner from "./components/CookieBanner"
 import Login from "./pages/client/Login"
 import Register from "./pages/client/Register"
 import PublicBooking from "./pages/PublicBooking"
@@ -63,6 +65,14 @@ export default function App() {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/cadastro" element={<Register />} />
+
+          {/*
+            Políticas: uma rota para os quatro textos. Pública e sem sessão —
+            quem precisa ler as regras de privacidade é justamente quem ainda
+            não entregou dado nenhum.
+          */}
+          <Route path="/politicas" element={<PolicyPage />} />
+          <Route path="/politicas/:slug" element={<PolicyPage />} />
 
           {/*
             Agendamento público: serviço, data e horário podem ser escolhidos
@@ -214,6 +224,12 @@ export default function App() {
             }
           />
         </Routes>
+        {/*
+          Fora de <Routes> para valer em qualquer tela, inclusive nas do
+          agendamento público — que é onde o visitante entrega dado pela
+          primeira vez e, portanto, onde o aviso precisa alcançá-lo.
+        */}
+        <CookieBanner />
       </BrowserRouter>
     </AuthProvider>
   )

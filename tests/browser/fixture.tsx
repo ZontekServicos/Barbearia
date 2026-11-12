@@ -10,6 +10,8 @@ import Schedule from '../../src/pages/client/Schedule'
 import BookingStatus from '../../src/pages/client/BookingStatus'
 import AppointmentDetail from '../../src/pages/admin/AppointmentDetail'
 import Landing from '../../src/pages/Landing'
+import PolicyPage from '../../src/pages/PolicyPage'
+import CookieBanner from '../../src/components/CookieBanner'
 import { AccountBlocked } from '../../src/pages/client/AccountStatus'
 import '../../src/index.css'
 
@@ -35,6 +37,24 @@ function render() {
         <Routes><Route path="/admin/agenda/:id" element={<AppointmentDetail />} /></Routes>
       </main>
     </AuthProvider></MemoryRouter>)
+    return
+  }
+  // Políticas: a rota real, porque o slug vem da URL.
+  if (page === 'policy') {
+    root.render(<MemoryRouter initialEntries={['/politicas/' + (routeToken ?? '')]}><AuthProvider>
+      <Routes>
+        <Route path="/politicas/:slug" element={<PolicyPage />} />
+        <Route path="/politicas" element={<PolicyPage />} />
+      </Routes>
+      <CookieBanner />
+    </AuthProvider></MemoryRouter>)
+    return
+  }
+  if (page === 'cookie-banner') {
+    root.render(<BrowserRouter><AuthProvider>
+      <main className="p-4"><p>Conteúdo da página</p></main>
+      <CookieBanner />
+    </AuthProvider></BrowserRouter>)
     return
   }
   if (page === 'status-route') {

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/Logo'
+import { POLICIES, POLICY_ORDER } from '@/constants/policies'
 import { useEffect, useState } from 'react'
 import {
   listBusinessHours,
@@ -326,6 +327,23 @@ export default function Landing() {
             <span className="font-display font-semibold text-[var(--foreground)]">ErickCorttes</span>
           </div>
           <p className="text-xs tracking-widest uppercase text-[var(--primary)]/80">Mais que um corte, um estilo de vida</p>
+          {/* Políticas no rodapé: é onde o visitante procura, e precisam estar
+              alcançáveis de qualquer página pública. */}
+          <nav aria-label="Políticas" className="w-full">
+            <ul className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
+              {POLICY_ORDER.map(slug => (
+                <li key={slug}>
+                  <Link
+                    to={`/politicas/${slug}`}
+                    className="min-h-11 inline-flex items-center text-xs hover:text-[var(--foreground)] transition-colors"
+                  >
+                    {POLICIES[slug].title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+
           <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
             <p>© 2026 ErickCorttes. Todos os direitos reservados.</p>
             <Link to="/admin" className="min-h-11 inline-flex items-center hover:text-[var(--foreground)] transition-colors">Área administrativa</Link>
